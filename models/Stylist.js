@@ -31,4 +31,4 @@ const StylistSchema = new mongoose.Schema({
   isAdmin: { type: Boolean, default: false },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Stylist', StylistSchema);
+module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);
