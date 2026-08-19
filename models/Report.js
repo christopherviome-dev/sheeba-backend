@@ -9,4 +9,4 @@ const ReportSchema = new mongoose.Schema({
   createdAt: { type: Number, default: () => Date.now() },
 });
 
-module.exports = mongoose.model('Report', ReportSchema);
+module.exports = mongoose.models.Report || mongoose.model('Report', ReportSchema);
