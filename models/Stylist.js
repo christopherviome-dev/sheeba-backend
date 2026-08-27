@@ -6,9 +6,9 @@ const StyleSchema = new mongoose.Schema({
   price: Number,
   duration: String,
   desc: String,
-  photo: String,
+  photo: String, // base64 data URL — fine at this scale, move to cloud storage later if it grows
   colorTag: String,
-  likes: { type: [String], default: [] },
+  likes: { type: [String], default: [] }, // clientIds
 }, { _id: false });
 
 const StylistSchema = new mongoose.Schema({
@@ -20,15 +20,16 @@ const StylistSchema = new mongoose.Schema({
   area: String,
   bio: String,
   coverPhoto: String,
+  brandColor: String,
   verifyPhoto: String,
   ghanaCardNum: String,
   pendingReview: { type: Boolean, default: false },
   verified: { type: Boolean, default: false },
   color: String,
   styles: { type: [StyleSchema], default: [] },
-  followers: { type: [String], default: [] },
+  followers: { type: [String], default: [] }, // clientIds
   lastActiveAt: { type: Number, default: () => Date.now() },
   isAdmin: { type: Boolean, default: false },
 }, { timestamps: true });
 
-module.exports = mongoose.model('Stylist', StylistSchema);
+module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);
