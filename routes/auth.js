@@ -27,6 +27,7 @@ router.post('/register', async (req, res) => {
     const stylist = await Stylist.create({
       phone, passwordHash, name,
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {
