@@ -1,6 +1,7 @@
 const express = require('express');
 const Request = require('../models/Request');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { recalculateGroupPoints } = require('./stylists');
 
 const router = express.Router();
 
@@ -27,6 +28,9 @@ router.put('/:id/status', requireAuth, async (req, res) => {
   r.status = req.body.status;
   r.updatedAt = Date.now();
   await r.save();
+  if (req.body.status === 'completed' && r.stylistId) {
+    await recalculateGroupPoints(r.stylistId);
+  }
   res.json(r);
 });
 
