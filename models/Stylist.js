@@ -20,6 +20,7 @@ const StylistSchema = new mongoose.Schema({
   area: String,
   bio: String,
   coverPhoto: String,
+  profilePhoto: String,
   brandColor: String,
   verifyPhoto: String,
   ghanaCardNum: String,
@@ -30,6 +31,9 @@ const StylistSchema = new mongoose.Schema({
   followers: { type: [String], default: [] }, // clientIds
   lastActiveAt: { type: Number, default: () => Date.now() },
   isAdmin: { type: Boolean, default: false },
+  status: { type: String, enum: ['UNDER_REVIEW', 'APPROVED'], default: 'UNDER_REVIEW' },
+  groupPoints: { type: Number, default: 0 },
+  starStatus: { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);
