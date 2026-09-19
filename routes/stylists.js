@@ -181,6 +181,46 @@ router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) =
 });
 
 // Public: follow/unfollow (by clientId, no login needed for browsing clients)
+// Public: record a real shop visit (someone opened this shop's page, whether
+// or not they go on to follow/register/request anything). Deduped per
+// visitor per shop over a 30-minute window, so refreshing the page or
+// clicking around repeatedly does not inflate the count — this stays a
+// genuine "how many distinct visits" signal, not a click counter.
+router.post('/:id/visit', async (req, res) => {
+  const { clientId } = req.body;
+  if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
+  const st = await Stylist.findById(req.params.id);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const recent = await Activity.findOne({
+    stylistId: st._id.toString(), clientId, type: 'SHOP_VISITED',
+    createdAt: { $gt: Date.now() - THIRTY_MIN },
+  });
+  if (!recent) {
+    try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'SHOP_VISITED' }); } catch (e) { /* non-fatal */ }
+  }
+  res.json({ ok: true });
+});
+
+// Admin (or the shop's own owner) — real visit and conversion stats for one
+// shop. "visitedNotFollowed" is a genuine set-difference: distinct visitors
+// minus the shop's actual followers list, not an estimate.
+router.get('/:id/stats', requireAuth, async (req, res) => {
+  if (!req.isAdmin && req.stylistId !== req.params.id) return res.status(403).json({ error: 'Not authorized.' });
+  const st = await Stylist.findById(req.params.id);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const visits = await Activity.find({ stylistId: st._id.toString(), type: 'SHOP_VISITED' });
+  const distinctVisitorIds = [...new Set(visits.map(v => v.clientId).filter(Boolean))];
+  const followerSet = new Set(st.followers || []);
+  const visitedNotFollowed = distinctVisitorIds.filter(id => !followerSet.has(id));
+  res.json({
+    totalVisits: visits.length,
+    distinctVisitors: distinctVisitorIds.length,
+    followers: st.followers.length,
+    visitedNotFollowed: visitedNotFollowed.length,
+  });
+});
+
 router.post('/:id/follow', async (req, res) => {
   const { clientId } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
