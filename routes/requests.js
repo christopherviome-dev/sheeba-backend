@@ -2,6 +2,7 @@ const express = require('express');
 const Request = require('../models/Request');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { recalculateGroupPoints } = require('./stylists');
+const Activity = require('../models/Activity');
 
 const router = express.Router();
 
@@ -17,6 +18,7 @@ router.post('/', async (req, res) => {
   if (!clientName || !clientPhone) return res.status(400).json({ error: 'Name and phone are required.' });
   const status = stylistId ? 'pending' : 'open'; // no stylistId = open/broadcast request
   const r = await Request.create({ stylistId, styleId, clientId, clientName, clientPhone, date, note, meet, emergency, budget, area, status });
+  if (stylistId) { try { await Activity.create({ stylistId, clientId, type: 'REQUEST_CREATED', meta: { requestId: r._id.toString() } }); } catch (e) { /* non-fatal */ } }
   res.json(r);
 });
 
@@ -28,7 +30,11 @@ router.put('/:id/status', requireAuth, async (req, res) => {
   r.status = req.body.status;
   r.updatedAt = Date.now();
   await r.save();
+  if (r.status === 'accepted' && r.stylistId) {
+    try { await Activity.create({ stylistId: r.stylistId, type: 'REQUEST_ACCEPTED', meta: { requestId: r._id.toString() } }); } catch (e) { /* non-fatal */ }
+  }
   if (req.body.status === 'completed' && r.stylistId) {
+    try { await Activity.create({ stylistId: r.stylistId, type: 'SERVICE_COMPLETED', meta: { requestId: r._id.toString() } }); } catch (e) { /* non-fatal */ }
     await recalculateGroupPoints(r.stylistId);
   }
   res.json(r);
@@ -51,6 +57,7 @@ router.put('/:id/rate', async (req, res) => {
   if (!r) return res.status(404).json({ error: 'Not found.' });
   r.rating = req.body.rating;
   await r.save();
+  if (r.stylistId) { try { await Activity.create({ stylistId: r.stylistId, type: 'RATING_RECEIVED', meta: { requestId: r._id.toString(), rating: r.rating } }); } catch (e) { /* non-fatal */ } }
   res.json(r);
 });
 
