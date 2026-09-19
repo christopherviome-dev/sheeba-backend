@@ -34,6 +34,11 @@ const StylistSchema = new mongoose.Schema({
   status: { type: String, enum: ['UNDER_REVIEW', 'APPROVED'], default: 'UNDER_REVIEW' },
   groupPoints: { type: Number, default: 0 },
   starStatus: { type: Boolean, default: false },
+  availability: {
+    type: String,
+    enum: ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'],
+    default: 'AVAILABLE',
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);
