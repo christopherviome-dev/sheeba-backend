@@ -14,7 +14,7 @@ const ActivitySchema = new mongoose.Schema({
     enum: [
       'ACCOUNT_CREATED', 'SHOP_APPROVED', 'WORK_UPLOADED', 'SERVICE_ADDED',
       'FOLLOW_RECEIVED', 'REQUEST_CREATED', 'REQUEST_ACCEPTED',
-      'SERVICE_COMPLETED', 'RATING_RECEIVED',
+      'SERVICE_COMPLETED', 'RATING_RECEIVED', 'SHOP_VISITED',
     ],
   },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },
