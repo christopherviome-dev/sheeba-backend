@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Stylist = require('../models/Stylist');
+const Activity = require('../models/Activity');
 
 const router = express.Router();
 const COLORS = ['#e63875', '#4b2069', '#f5a623', '#b81e58', '#33124a', '#c97d0a'];
@@ -29,6 +30,7 @@ router.post('/register', async (req, res) => {
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
+    try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {
     res.status(500).json({ error: 'Could not create account.' });
