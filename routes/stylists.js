@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
+const Activity = require('../models/Activity');
 
 const router = express.Router();
 
@@ -44,6 +45,27 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json(publicStylist(st));
 });
 
+// Public: fetch a single shop by id — this is what powers a shop's clean,
+// shareable public URL (see Priority 2). Same security rule as the list
+// route above: an UNDER_REVIEW shop is invisible to everyone except an
+// admin or the shop's own owner, so a direct link can never be used to
+// bypass the review gate.
+router.get('/:id', async (req, res) => {
+  const st = await Stylist.findById(req.params.id);
+  if (!st) return res.status(404).json({ error: 'Shop not found.' });
+  if (st.status !== 'APPROVED') {
+    const isAdminRequest = tryGetAdminFlag(req);
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    let isOwner = false;
+    if (token) {
+      try { isOwner = jwt.verify(token, process.env.JWT_SECRET).id === st._id.toString(); } catch (e) { /* not the owner */ }
+    }
+    if (!isAdminRequest && !isOwner) return res.status(404).json({ error: 'Shop not found.' });
+  }
+  res.json(publicStylist(st));
+});
+
 const Request = require('../models/Request');
 
 // Computes AND STORES Group Points + Star status — the single source of
@@ -68,7 +90,7 @@ async function recalculateGroupPoints(stylistId) {
 
 // Auth: update my page (salon name, category, area, bio, cover photo)
 router.put('/me', requireAuth, async (req, res) => {
-  const { salonName, name, category, area, bio, coverPhoto, profilePhoto, brandColor } = req.body;
+  const { salonName, name, category, area, bio, coverPhoto, profilePhoto, brandColor, availability } = req.body;
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   if (salonName !== undefined) st.salonName = salonName;
@@ -78,6 +100,7 @@ router.put('/me', requireAuth, async (req, res) => {
   if (bio !== undefined) st.bio = bio;
   if (coverPhoto !== undefined) st.coverPhoto = coverPhoto;
   if (profilePhoto !== undefined) st.profilePhoto = profilePhoto;
+  if (availability !== undefined) st.availability = availability;
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
   if (brandColor !== undefined) {
@@ -103,6 +126,7 @@ router.post('/me/styles', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
   st.styles.push({ id: uid('sty'), name, price, duration, desc, photo, likes: [] });
   await st.save();
+  try { await Activity.create({ stylistId: st._id.toString(), type: photo ? 'WORK_UPLOADED' : 'SERVICE_ADDED' }); } catch (e) { /* non-fatal */ }
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated));
 });
@@ -152,6 +176,7 @@ router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
 router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) => {
   const st = await Stylist.findByIdAndUpdate(req.params.id, { status: 'APPROVED' }, { new: true });
   if (!st) return res.status(404).json({ error: 'Not found.' });
+  try { await Activity.create({ stylistId: st._id.toString(), type: 'SHOP_APPROVED' }); } catch (e) { /* non-fatal */ }
   res.json(publicStylist(st));
 });
 
@@ -162,8 +187,10 @@ router.post('/:id/follow', async (req, res) => {
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   const i = st.followers.indexOf(clientId);
+  const wasNewFollow = i < 0;
   if (i >= 0) st.followers.splice(i, 1); else st.followers.push(clientId);
   await st.save();
+  if (wasNewFollow) { try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'FOLLOW_RECEIVED' }); } catch (e) { /* non-fatal */ } }
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated));
 });
