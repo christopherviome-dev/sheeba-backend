@@ -47,6 +47,15 @@ const StylistSchema = new mongoose.Schema({
   restrictedAt: { type: Number, default: null },
   restrictedBy: { type: String, default: null }, // admin's stylistId
   restoredAt: { type: Number, default: null },
+  // Staff/apprentice access: other REAL Sheeba accounts (their own, not a
+  // fake invite to someone without one) authorized to see and respond to
+  // THIS shop's requests on the owner's behalf. Deliberately does not grant
+  // access to edit this shop's branding, services, or account settings —
+  // scoped narrowly to the operational side, per the actual stated need.
+  staffAccess: [{
+    stylistId: { type: String, required: true },
+    addedAt: { type: Number, default: () => Date.now() },
+  }],
   groupPoints: { type: Number, default: 0 },
   starStatus: { type: Boolean, default: false },
   availability: {

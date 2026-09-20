@@ -133,6 +133,13 @@ router.get('/search', async (req, res) => {
   res.json(results);
 });
 
+// For a staff account: which real shops have they actually been granted
+// access to — never guessed, always a genuine staffAccess entry.
+router.get('/managed-by-me', requireAuth, async (req, res) => {
+  const shops = await Stylist.find({ 'staffAccess.stylistId': req.stylistId });
+  res.json(shops.map(s => publicStylist(s, false)));
+});
+
 // Public: single work item lookup, for a direct/shared link to one style —
 // only ever from an approved (or, for the owner/admin, any) shop.
 router.get('/styles/:styleId', async (req, res) => {
@@ -400,6 +407,39 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record
+});
+
+// ---------- Staff / apprentice access ----------
+// Owner-only: grant scoped access to a REAL existing account, found by
+// phone — never a fake invite to someone who hasn't registered.
+router.post('/me/staff', requireAuth, async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Enter the phone number of their own Sheeba account.' });
+  const staffAccount = await Stylist.findOne({ phone });
+  if (!staffAccount) return res.status(404).json({ error: 'No Sheeba account found with that phone number — they need to register their own account first.' });
+  if (staffAccount._id.toString() === req.stylistId) return res.status(400).json({ error: 'You can\'t add yourself as staff.' });
+  const owner = await Stylist.findById(req.stylistId);
+  if (owner.staffAccess.some(s => s.stylistId === staffAccount._id.toString())) return res.status(400).json({ error: 'They already have access.' });
+  owner.staffAccess.push({ stylistId: staffAccount._id.toString() });
+  await owner.save();
+  await notify({ recipientId: staffAccount._id.toString(), recipientType: 'stylist', type: 'SHOP_APPROVED', title: `${owner.salonName || owner.name} gave you shop access`, message: 'You can now help manage their requests.', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
+  res.json({ ok: true, staffName: staffAccount.name });
+});
+
+router.get('/me/staff', requireAuth, async (req, res) => {
+  const owner = await Stylist.findById(req.stylistId);
+  const withNames = await Promise.all((owner.staffAccess || []).map(async s => {
+    const acc = await Stylist.findById(s.stylistId);
+    return { stylistId: s.stylistId, name: acc ? acc.name : 'Unknown', addedAt: s.addedAt };
+  }));
+  res.json(withNames);
+});
+
+router.delete('/me/staff/:stylistId', requireAuth, async (req, res) => {
+  const owner = await Stylist.findById(req.stylistId);
+  owner.staffAccess = owner.staffAccess.filter(s => s.stylistId !== req.params.stylistId);
+  await owner.save();
+  res.json({ ok: true });
 });
 
 // Exposed so routes/requests.js can trigger a recalculation when a booking

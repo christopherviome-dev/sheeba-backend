@@ -8,6 +8,7 @@ const { notify } = require('./notifications');
 const Conversation = require('../models/Conversation');
 const Customer = require('../models/Customer');
 const Referral = require('../models/Referral');
+const Stylist = require('../models/Stylist');
 
 const router = express.Router();
 
@@ -76,7 +77,9 @@ router.post('/', async (req, res) => {
 router.put('/:id/status', requireAuth, async (req, res) => {
   const r = await Request.findById(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found.' });
-  if (r.stylistId !== req.stylistId && !req.isAdmin) return res.status(403).json({ error: 'Not your request.' });
+  const isOwner = r.stylistId === req.stylistId;
+  const isAuthorizedStaff = !isOwner && r.stylistId && await Stylist.exists({ _id: r.stylistId, 'staffAccess.stylistId': req.stylistId });
+  if (!isOwner && !isAuthorizedStaff && !req.isAdmin) return res.status(403).json({ error: 'Not your request.' });
   r.status = req.body.status;
   r.updatedAt = Date.now();
   await r.save();
