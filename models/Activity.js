@@ -15,6 +15,7 @@ const ActivitySchema = new mongoose.Schema({
       'ACCOUNT_CREATED', 'SHOP_APPROVED', 'WORK_UPLOADED', 'SERVICE_ADDED',
       'FOLLOW_RECEIVED', 'REQUEST_CREATED', 'REQUEST_ACCEPTED',
       'SERVICE_COMPLETED', 'RATING_RECEIVED', 'SHOP_VISITED',
+      'STYLE_SAVED', 'SEARCH_PERFORMED', 'SHOP_SHARED', 'REFERRAL_VISIT', 'REFERRED_REQUEST_CREATED',
     ],
   },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },
