@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Stylist = require('../models/Stylist');
 const Activity = require('../models/Activity');
+const { notifyAllAdmins } = require('./notifications');
 
 const router = express.Router();
 const COLORS = ['#e63875', '#4b2069', '#f5a623', '#b81e58', '#33124a', '#c97d0a'];
@@ -31,6 +32,7 @@ router.post('/register', async (req, res) => {
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
+    await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {
     res.status(500).json({ error: 'Could not create account.' });
@@ -45,6 +47,9 @@ router.post('/login', async (req, res) => {
     if (!stylist) return res.status(401).json({ error: 'No account found with that phone number.' });
     const ok = await bcrypt.compare(password, stylist.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
+    if (['SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(stylist.accountStatus)) {
+      return res.status(403).json({ error: `This account is ${stylist.accountStatus.toLowerCase()}${stylist.restrictionReason ? ': ' + stylist.restrictionReason : '.'}` });
+    }
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {
     res.status(500).json({ error: 'Login failed.' });
