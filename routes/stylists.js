@@ -3,12 +3,24 @@ const jwt = require('jsonwebtoken');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const Activity = require('../models/Activity');
+const Referral = require('../models/Referral');
+const AdminAction = require('../models/AdminAction');
+const { notify } = require('./notifications');
 
 const router = express.Router();
 
-function publicStylist(s) {
+// Strips fields that must never leave the server for a given context.
+// includeSensitive=true is only correct when the caller is either the
+// account's own owner, or an admin acting on ID-verification/shop-review —
+// both legitimate, existing uses. Every public-facing or anonymous-action
+// response must pass false.
+function publicStylist(s, includeSensitive = false) {
   const obj = s.toObject ? s.toObject() : s;
   delete obj.passwordHash;
+  if (!includeSensitive) {
+    delete obj.ghanaCardNum;
+    delete obj.verifyPhoto;
+  }
   return obj;
 }
 function uid(prefix) { return prefix + '_' + Math.random().toString(36).slice(2, 9); }
@@ -33,16 +45,103 @@ function tryGetAdminFlag(req) {
 // UNDER_REVIEW ones, so nothing can go silently unreviewed.
 router.get('/', async (req, res) => {
   const isAdminRequest = tryGetAdminFlag(req);
-  const filter = isAdminRequest ? {} : { status: 'APPROVED' };
+  const filter = isAdminRequest ? {} : { status: 'APPROVED', accountStatus: 'ACTIVE' };
   const list = await Stylist.find(filter);
-  res.json(list.map(publicStylist));
+  // NOTE: deliberately NOT `list.map(publicStylist)` — Array.map passes the
+  // element's index as the function's second argument, which is exactly
+  // publicStylist's includeSensitive parameter. That would have leaked
+  // sensitive fields for every item except index 0 on any request, since a
+  // truthy index (1, 2, 3...) would silently mean "include sensitive data."
+  res.json(list.map(s => publicStylist(s, isAdminRequest)));
 });
 
 // Auth: get my own record
 router.get('/me', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
-  res.json(publicStylist(st));
+  res.json(publicStylist(st, true));
+});
+
+// Deterministic aliases only, per the spec's explicit instruction not to
+// build an AI synonym engine — a small, maintainable, real dictionary.
+const SEARCH_ALIASES = {
+  'box braids': ['box braid', 'boxbraids'],
+  'knotless': ['knotless braids', 'boho knotless'],
+  'low fade': ['fade', 'low fade haircut'],
+  'retwist': ['loc retwist', 'locs retwist'],
+  'gel nails': ['gel', 'gelnails'],
+  'soft glam': ['glam makeup', 'glam'],
+  'french tips': ['french manicure', 'frenchtips'],
+};
+function expandQuery(q) {
+  const terms = new Set([q]);
+  for (const [key, aliases] of Object.entries(SEARCH_ALIASES)) {
+    if (q === key || aliases.includes(q)) { terms.add(key); aliases.forEach(a => terms.add(a)); }
+  }
+  return [...terms];
+}
+
+// Real server-side search — queries the database directly rather than
+// shipping every shop to the client for JS filtering. Only ever searches
+// APPROVED shops (or everyone, for an admin request), matching the exact
+// same visibility rule enforced everywhere else in this file.
+// Real haversine great-circle distance in km — plain math, no external
+// service, no API key. Returns null if either point is missing, so callers
+// never fabricate a distance for a shop that hasn't opted into sharing one.
+function distanceKm(lat1, lng1, lat2, lng2) {
+  if ([lat1, lng1, lat2, lng2].some(v => typeof v !== 'number')) return null;
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+router.get('/search', async (req, res) => {
+  const isAdminRequest = tryGetAdminFlag(req);
+  const q = (req.query.q || '').trim().toLowerCase();
+  const category = req.query.category;
+  const area = req.query.area;
+  const myLat = req.query.lat ? parseFloat(req.query.lat) : null;
+  const myLng = req.query.lng ? parseFloat(req.query.lng) : null;
+  const filter = isAdminRequest ? {} : { status: 'APPROVED', accountStatus: 'ACTIVE' };
+  if (category) filter.category = category;
+  if (area) filter.area = new RegExp(area, 'i');
+  let candidates = await Stylist.find(filter);
+  if (q) {
+    const terms = expandQuery(q);
+    candidates = candidates.filter(st => {
+      const haystack = [st.salonName, st.name, st.category, st.area, st.bio, ...(st.styles || []).map(s => s.name)]
+        .filter(Boolean).join(' ').toLowerCase();
+      return terms.some(t => haystack.includes(t));
+    });
+  }
+  if (q) { try { await Activity.create({ type: 'SEARCH_PERFORMED', meta: { q, resultCount: candidates.length } }); } catch (e) { /* non-fatal */ } }
+  let results = candidates.map(s => publicStylist(s, isAdminRequest));
+  // Real distance, only when the searcher shared their own real location AND
+  // the shop has one on file. A shop with no location just gets distance:
+  // null — never a guessed or zero distance standing in for "unknown."
+  if (myLat !== null && myLng !== null) {
+    results = results.map(s => ({ ...s, distanceKm: (s.location && s.location.lat != null) ? distanceKm(myLat, myLng, s.location.lat, s.location.lng) : null }));
+    results.sort((a, b) => {
+      if (a.distanceKm === null && b.distanceKm === null) return 0;
+      if (a.distanceKm === null) return 1; // unknown-distance shops sort last, never fabricated to the front
+      if (b.distanceKm === null) return -1;
+      return a.distanceKm - b.distanceKm;
+    });
+  }
+  res.json(results);
+});
+
+// Public: single work item lookup, for a direct/shared link to one style —
+// only ever from an approved (or, for the owner/admin, any) shop.
+router.get('/styles/:styleId', async (req, res) => {
+  const isAdminRequest = tryGetAdminFlag(req);
+  const filter = isAdminRequest ? {} : { status: 'APPROVED', accountStatus: 'ACTIVE' };
+  const st = await Stylist.findOne({ ...filter, 'styles.id': req.params.styleId });
+  if (!st) return res.status(404).json({ error: 'Style not found.' });
+  const style = st.styles.find(s => s.id === req.params.styleId);
+  res.json({ style, shop: publicStylist(st, isAdminRequest) });
 });
 
 // Public: fetch a single shop by id — this is what powers a shop's clean,
@@ -51,19 +150,27 @@ router.get('/me', requireAuth, async (req, res) => {
 // admin or the shop's own owner, so a direct link can never be used to
 // bypass the review gate.
 router.get('/:id', async (req, res) => {
-  const st = await Stylist.findById(req.params.id);
-  if (!st) return res.status(404).json({ error: 'Shop not found.' });
-  if (st.status !== 'APPROVED') {
-    const isAdminRequest = tryGetAdminFlag(req);
-    const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-    let isOwner = false;
-    if (token) {
-      try { isOwner = jwt.verify(token, process.env.JWT_SECRET).id === st._id.toString(); } catch (e) { /* not the owner */ }
-    }
-    if (!isAdminRequest && !isOwner) return res.status(404).json({ error: 'Shop not found.' });
+  let st;
+  try {
+    st = await Stylist.findById(req.params.id);
+  } catch (e) {
+    // Mongoose throws (not rejects-gracefully) on a malformed id — e.g. a
+    // request to a route we didn't expect, like /search, landing here
+    // before it was reordered below. Any non-ObjectId string must return a
+    // clean 404, never crash the whole process.
+    return res.status(404).json({ error: 'Shop not found.' });
   }
-  res.json(publicStylist(st));
+  if (!st) return res.status(404).json({ error: 'Shop not found.' });
+  const isAdminRequest = tryGetAdminFlag(req);
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  let isOwner = false;
+  if (token) {
+    try { isOwner = jwt.verify(token, process.env.JWT_SECRET).id === st._id.toString(); } catch (e) { /* not the owner */ }
+  }
+  const isPubliclyVisible = st.status === 'APPROVED' && st.accountStatus === 'ACTIVE';
+  if (!isPubliclyVisible && !isAdminRequest && !isOwner) return res.status(404).json({ error: 'Shop not found.' });
+  res.json(publicStylist(st, isAdminRequest || isOwner));
 });
 
 const Request = require('../models/Request');
@@ -90,11 +197,14 @@ async function recalculateGroupPoints(stylistId) {
 
 // Auth: update my page (salon name, category, area, bio, cover photo)
 router.put('/me', requireAuth, async (req, res) => {
-  const { salonName, name, category, area, bio, coverPhoto, profilePhoto, brandColor, availability } = req.body;
+  const { salonName, name, category, area, bio, coverPhoto, profilePhoto, brandColor, availability, lat, lng } = req.body;
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   if (salonName !== undefined) st.salonName = salonName;
   if (name !== undefined) st.name = name;
+  if (lat !== undefined && lng !== undefined && typeof lat === 'number' && typeof lng === 'number' && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+    st.location = { lat, lng };
+  }
   if (category !== undefined) st.category = category;
   if (area !== undefined) st.area = area;
   if (bio !== undefined) st.bio = bio;
@@ -110,7 +220,7 @@ router.put('/me', requireAuth, async (req, res) => {
     }
     // else: silently ignored — perk not yet earned, matches the frontend's own gate
   }
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, true));
 });
 
 // Auth: mark myself active (for the online indicator)
@@ -128,7 +238,7 @@ router.post('/me/styles', requireAuth, async (req, res) => {
   await st.save();
   try { await Activity.create({ stylistId: st._id.toString(), type: photo ? 'WORK_UPLOADED' : 'SERVICE_ADDED' }); } catch (e) { /* non-fatal */ }
   const updated = await recalculateGroupPoints(st._id);
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, true));
 });
 
 // Auth: update a style's price
@@ -137,9 +247,10 @@ router.put('/me/styles/:styleId', requireAuth, async (req, res) => {
   const style = st.styles.find(s => s.id === req.params.styleId);
   if (!style) return res.status(404).json({ error: 'Style not found.' });
   if (req.body.price !== undefined) style.price = req.body.price;
+  if (req.body.active !== undefined) style.active = !!req.body.active;
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, true));
 });
 
 // Auth: remove a style
@@ -148,7 +259,7 @@ router.delete('/me/styles/:styleId', requireAuth, async (req, res) => {
   st.styles = st.styles.filter(s => s.id !== req.params.styleId);
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, true));
 });
 
 // Auth: submit ID verification (Ghana Card number and/or photo)
@@ -160,7 +271,7 @@ router.post('/me/verify', requireAuth, async (req, res) => {
   if (verifyPhoto) st.verifyPhoto = verifyPhoto;
   st.pendingReview = true;
   await st.save();
-  res.json(publicStylist(st));
+  res.json(publicStylist(st, true));
 });
 
 // Admin: approve a stylist's ID verification (Ghana Card / photo review).
@@ -169,7 +280,8 @@ router.post('/me/verify', requireAuth, async (req, res) => {
 // and vice versa. Do not merge these two routes.
 router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
   const st = await Stylist.findByIdAndUpdate(req.params.id, { verified: true, pendingReview: false }, { new: true });
-  res.json(publicStylist(st));
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'VERIFICATION_APPROVED', targetType: 'stylist', targetId: req.params.id }); } catch (e) { /* non-fatal */ }
+  res.json(publicStylist(st, true));
 });
 
 // Admin: approve a shop for public Discovery listing (the UNDER_REVIEW gate).
@@ -177,7 +289,31 @@ router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) =
   const st = await Stylist.findByIdAndUpdate(req.params.id, { status: 'APPROVED' }, { new: true });
   if (!st) return res.status(404).json({ error: 'Not found.' });
   try { await Activity.create({ stylistId: st._id.toString(), type: 'SHOP_APPROVED' }); } catch (e) { /* non-fatal */ }
-  res.json(publicStylist(st));
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'SHOP_APPROVED', targetType: 'stylist', targetId: st._id.toString() }); } catch (e) { /* non-fatal */ }
+  await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: 'SHOP_APPROVED', title: 'Your shop is now live!', message: 'Your shop is now visible in Discovery.', entityType: 'shop', entityId: st._id.toString(), priority: 'important' });
+  res.json(publicStylist(st, true));
+});
+
+// Admin: restrict an account. Never a silent action — reason is required,
+// and it's both stored on the account AND recorded permanently in the
+// audit log, so a restriction can always be explained later.
+router.post('/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
+  const { accountStatus, reason } = req.body;
+  if (!['RESTRICTED', 'SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(accountStatus)) return res.status(400).json({ error: 'Invalid account status.' });
+  if (!reason) return res.status(400).json({ error: 'A reason is required for any account restriction.' });
+  const st = await Stylist.findByIdAndUpdate(req.params.id, {
+    accountStatus, restrictionReason: reason, restrictedAt: Date.now(), restrictedBy: req.stylistId, restoredAt: null,
+  }, { new: true });
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTRICTED', targetType: 'stylist', targetId: st._id.toString(), reason, meta: { accountStatus } }); } catch (e) { /* non-fatal */ }
+  res.json(publicStylist(st, true));
+});
+
+router.post('/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+  const st = await Stylist.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now() }, { new: true });
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTORED', targetType: 'stylist', targetId: st._id.toString() }); } catch (e) { /* non-fatal */ }
+  res.json(publicStylist(st, true));
 });
 
 // Public: follow/unfollow (by clientId, no login needed for browsing clients)
@@ -187,7 +323,7 @@ router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) =
 // clicking around repeatedly does not inflate the count — this stays a
 // genuine "how many distinct visits" signal, not a click counter.
 router.post('/:id/visit', async (req, res) => {
-  const { clientId } = req.body;
+  const { clientId, ref } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
@@ -198,6 +334,22 @@ router.post('/:id/visit', async (req, res) => {
   });
   if (!recent) {
     try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'SHOP_VISITED' }); } catch (e) { /* non-fatal */ }
+  }
+  // Referral attribution is a real, separate event — only logged when `ref`
+  // resolves to a genuine, active code that actually belongs to THIS shop.
+  // A code for a different shop, or an inactive/unknown one, is silently
+  // ignored rather than attributed to the wrong professional.
+  if (ref) {
+    try {
+      const referral = await Referral.findOne({ code: ref, stylistId: st._id.toString(), active: true });
+      if (referral) {
+        const recentRef = await Activity.findOne({
+          stylistId: st._id.toString(), clientId, type: 'REFERRAL_VISIT', 'meta.code': ref,
+          createdAt: { $gt: Date.now() - THIRTY_MIN },
+        });
+        if (!recentRef) await Activity.create({ stylistId: st._id.toString(), clientId, type: 'REFERRAL_VISIT', meta: { code: ref } });
+      }
+    } catch (e) { /* non-fatal */ }
   }
   res.json({ ok: true });
 });
@@ -232,7 +384,7 @@ router.post('/:id/follow', async (req, res) => {
   await st.save();
   if (wasNewFollow) { try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'FOLLOW_RECEIVED' }); } catch (e) { /* non-fatal */ } }
   const updated = await recalculateGroupPoints(st._id);
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record — never their private ID data
 });
 
 // Public: like/unlike a style
@@ -247,7 +399,7 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
   if (i >= 0) style.likes.splice(i, 1); else style.likes.push(clientId);
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
-  res.json(publicStylist(updated));
+  res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record
 });
 
 // Exposed so routes/requests.js can trigger a recalculation when a booking
