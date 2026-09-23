@@ -6,6 +6,8 @@ const { requireCustomerAuth } = require('../middleware/auth');
 const Activity = require('../models/Activity');
 const SavedStyle = require('../models/SavedStyle');
 const SavingsGoal = require('../models/SavingsGoal');
+const StyleRecord = require('../models/StyleRecord');
+const RepeatPreference = require('../models/RepeatPreference');
 const Stylist = require('../models/Stylist');
 const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
@@ -173,6 +175,92 @@ router.delete('/me/savings-goals/:id', requireCustomerAuth, async (req, res) => 
   const goal = await SavingsGoal.findById(req.params.id);
   if (!goal || goal.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
   await goal.deleteOne();
+  res.json({ ok: true });
+});
+
+// ---------- Style Records: real, automatically created service history —
+// see routes/requests.js for where these are actually created. ----------
+router.get('/me/style-records', requireCustomerAuth, async (req, res) => {
+  const list = await StyleRecord.find({ customerId: req.customerId }).sort({ completedAt: -1 });
+  res.json(list);
+});
+
+// "Save This Style" — the customer attaches the actual finished-result
+// photo and any notes to their own real completed service. Never lets the
+// customer attach a photo to someone else's record.
+router.patch('/me/style-records/:id', requireCustomerAuth, async (req, res) => {
+  const record = await StyleRecord.findById(req.params.id);
+  if (!record || record.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
+  const { finishedPhoto, notes } = req.body;
+  if (finishedPhoto !== undefined) record.finishedPhoto = finishedPhoto;
+  if (notes !== undefined) record.notes = notes;
+  await record.save();
+  res.json(record);
+});
+
+// Convenience for the customer's History view, which has requestId on
+// hand, not the StyleRecord's own id — finds the real record created
+// automatically at completion and attaches the finished photo/notes to it.
+router.patch('/me/style-records/by-request/:requestId', requireCustomerAuth, async (req, res) => {
+  const record = await StyleRecord.findOne({ requestId: req.params.requestId, customerId: req.customerId });
+  if (!record) return res.status(404).json({ error: 'No style record found for that service yet.' });
+  const { finishedPhoto, notes } = req.body;
+  if (finishedPhoto !== undefined) record.finishedPhoto = finishedPhoto;
+  if (notes !== undefined) record.notes = notes;
+  try { await Activity.create({ clientId: req.customerId, type: 'STYLE_SAVED', meta: { styleRecordId: record._id.toString() } }); } catch (e) { /* non-fatal */ }
+  await record.save();
+  res.json(record);
+});
+
+// ---------- Repeat preferences: customer-chosen, never inferred ----------
+router.post('/me/repeat-preferences', requireCustomerAuth, async (req, res) => {
+  const { stylistId, styleId, serviceName, intervalDays, lastCompletedAt } = req.body;
+  if (!stylistId || !intervalDays) return res.status(400).json({ error: 'A shop and an interval are required.' });
+  const pref = await RepeatPreference.findOneAndUpdate(
+    { customerId: req.customerId, stylistId, styleId: styleId || null },
+    { serviceName, intervalDays, lastCompletedAt: lastCompletedAt || Date.now(), updatedAt: Date.now(), remindersEnabled: true, lastNotifiedStatus: null },
+    { upsert: true, new: true }
+  );
+  res.json(pref);
+});
+
+router.get('/me/repeat-preferences', requireCustomerAuth, async (req, res) => {
+  const list = await RepeatPreference.find({ customerId: req.customerId });
+  const withStatus = await Promise.all(list.map(async p => {
+    const computed = RepeatPreference.computeStatus(p);
+    // Notify only when the status has genuinely changed since the last
+    // time we notified for this preference — this is the real dedup: a
+    // customer refreshing this page a hundred times in one day can never
+    // generate a hundred notifications for the same due date.
+    if (p.remindersEnabled && ['APPROACHING', 'DUE', 'OVERDUE'].includes(computed.status) && computed.status !== p.lastNotifiedStatus) {
+      try {
+        const notifType = computed.status === 'OVERDUE' ? 'SERVICE_OVERDUE' : 'SERVICE_DUE_SOON';
+        await notify({ recipientId: req.customerId, recipientType: 'customer', type: notifType, title: `Your ${p.serviceName || 'usual service'} may be ${computed.status.toLowerCase()}`, message: computed.daysUntilDue >= 0 ? `${computed.daysUntilDue} day(s) to go` : `${-computed.daysUntilDue} day(s) overdue`, entityType: 'shop', entityId: p.stylistId, priority: computed.status === 'OVERDUE' ? 'time_sensitive' : 'normal' });
+        await notify({ recipientId: p.stylistId, recipientType: 'stylist', type: notifType, title: `A customer may be due for ${p.serviceName || 'a repeat service'} soon`, entityType: 'shop', entityId: p.stylistId, priority: 'normal' });
+        p.lastNotifiedStatus = computed.status;
+        await p.save();
+      } catch (e) { /* non-fatal — status still displays correctly even if the notification failed */ }
+    }
+    return { ...p.toObject(), ...computed };
+  }));
+  res.json(withStatus);
+});
+
+router.put('/me/repeat-preferences/:id', requireCustomerAuth, async (req, res) => {
+  const pref = await RepeatPreference.findById(req.params.id);
+  if (!pref || pref.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
+  const { intervalDays, remindersEnabled } = req.body;
+  if (intervalDays !== undefined) pref.intervalDays = intervalDays;
+  if (remindersEnabled !== undefined) pref.remindersEnabled = remindersEnabled;
+  pref.updatedAt = Date.now();
+  await pref.save();
+  res.json({ ...pref.toObject(), ...RepeatPreference.computeStatus(pref) });
+});
+
+router.delete('/me/repeat-preferences/:id', requireCustomerAuth, async (req, res) => {
+  const pref = await RepeatPreference.findById(req.params.id);
+  if (!pref || pref.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
+  await pref.deleteOne();
   res.json({ ok: true });
 });
 

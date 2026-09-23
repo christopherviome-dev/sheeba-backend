@@ -3,6 +3,7 @@ const Request = require('../models/Request');
 const Customer = require('../models/Customer');
 const CustomerNote = require('../models/CustomerNote');
 const Referral = require('../models/Referral');
+const RepeatPreference = require('../models/RepeatPreference');
 const Activity = require('../models/Activity');
 const { requireAuth } = require('../middleware/auth');
 
@@ -193,6 +194,21 @@ router.get('/me/service-value', requireAuth, async (req, res) => {
     repeatCustomers: repeatInWindow,
     newCustomers: newInWindow,
   });
+});
+
+// Finally real: "Customers Due Soon" — every earlier spec tonight that
+// wanted this was correctly told it didn't exist yet. It's built on the
+// customer's own real, chosen interval — never inferred, never shown for a
+// customer who hasn't opted into a repeat preference with this shop.
+router.get('/me/customers-due-soon', requireAuth, async (req, res) => {
+  const prefs = await RepeatPreference.find({ stylistId: req.stylistId, remindersEnabled: true });
+  const withStatus = await Promise.all(prefs.map(async p => {
+    const computed = RepeatPreference.computeStatus(p);
+    const customer = await Customer.findById(p.customerId).catch(() => null);
+    return { ...computed, serviceName: p.serviceName, customerId: p.customerId, customerName: customer ? customer.name : 'Unknown' };
+  }));
+  const dueSoon = withStatus.filter(p => ['APPROACHING', 'DUE', 'OVERDUE'].includes(p.status));
+  res.json(dueSoon);
 });
 
 module.exports = router;
