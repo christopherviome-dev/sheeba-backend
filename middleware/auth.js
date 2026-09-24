@@ -6,6 +6,10 @@ function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not logged in.' });
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+    // requireAuth guards professional/admin routes only. A customer token is
+    // a valid login, but not for these routes, so it must never pass here
+    // (e.g. a customer "claiming" a professional's booking).
+    if (payload.role === 'customer') return res.status(403).json({ error: 'This action is for professional accounts.' });
     req.stylistId = payload.id;
     req.isAdmin = !!payload.isAdmin;
     next();

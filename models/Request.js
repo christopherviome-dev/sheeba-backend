@@ -14,6 +14,9 @@ const RequestSchema = new mongoose.Schema({
   clientName: String,
   clientPhone: String,
   date: String,
+  // The real requested appointment moment (ms timestamp). `date` above is
+  // kept as a human-readable label and for older clients that only send text.
+  preferredAt: { type: Number, default: null },
   note: String,
   meet: String, // 'provider' | 'midway' | 'client'
   emergency: String,

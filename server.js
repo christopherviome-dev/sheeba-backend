@@ -1,5 +1,9 @@
 require('dotenv').config();
 const express = require('express');
+// Must be required right after express and before any routes: makes Express 4
+// pass errors thrown inside async routes to the error handler below, instead
+// of crashing the whole server (one bad request used to take Sheeba offline).
+require('express-async-errors');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
@@ -38,6 +42,23 @@ app.use('/api/telegram', telegramRoutes);
 app.use('/api/currencies', currencyRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
+
+// Safety net: any error a route didn't handle becomes a normal error response.
+// Internal details are logged for us, never sent to the user.
+app.use((err, req, res, next) => {
+  console.error('Request error:', req.method, req.path, '-', err.name, err.message);
+  if (res.headersSent) return next(err);
+  if (err.name === 'CastError') return res.status(404).json({ error: 'Not found.' });
+  if (err.name === 'ValidationError') return res.status(400).json({ error: 'Some of the information sent isn\u2019t valid.' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'That upload is too large.' });
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'The request was not valid.' });
+  res.status(500).json({ error: 'Something went wrong. Please try again.' });
+});
+
+// Last resort: log stray async errors instead of letting them kill the server.
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err && err.message ? err.message : err);
+});
 
 const PORT = process.env.PORT || 4000;
 
