@@ -26,7 +26,9 @@ async function notifyRealCustomer(clientId, fields) {
 
 // Customer contact details and free-text notes are private. They are only
 // ever returned to the people involved in that specific request.
-const CONTACT_FIELDS = ['clientName', 'clientPhone', 'clientId'];
+// `emergency` is the customer's emergency contact (a name and phone number of
+// someone who knows where they're going), so it's a third person's details.
+const CONTACT_FIELDS = ['clientName', 'clientPhone', 'clientId', 'emergency'];
 const DETAIL_FIELDS = ['note', 'area', 'budget'];
 function redact(r, fields) {
   const o = r.toObject ? r.toObject() : { ...r };
