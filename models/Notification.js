@@ -12,6 +12,7 @@ const NotificationSchema = new mongoose.Schema({
       'SHOP_UNDER_REVIEW', 'REPORT_FILED', 'COMMUNITY_FEEDBACK',
       'PAYMENT_SUCCESSFUL', 'PAYMENT_FAILED', 'REFUND_SUCCESSFUL',
       'SERVICE_DUE_SOON', 'SERVICE_OVERDUE',
+      'VERIFICATION_SUBMITTED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED',
     ],
   },
   title: { type: String, required: true },

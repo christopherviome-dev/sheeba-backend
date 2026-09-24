@@ -5,7 +5,8 @@ const { requireAuth, requireAdmin } = require('../middleware/auth');
 const Activity = require('../models/Activity');
 const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
-const { notify } = require('./notifications');
+const { notify, notifyAllAdmins } = require('./notifications');
+const { normalizeGhanaCard, cleanLegalName, checkCardPhoto } = require('../lib/identity');
 
 const router = express.Router();
 
@@ -20,6 +21,8 @@ function publicStylist(s, includeSensitive = false) {
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
     delete obj.verifyPhoto;
+    delete obj.legalFullName;
+    delete obj.verificationRejectedReason;
   }
   return obj;
 }
@@ -270,15 +273,39 @@ router.delete('/me/styles/:styleId', requireAuth, async (req, res) => {
 });
 
 // Auth: submit ID verification (Ghana Card number and/or photo)
+// Stylist submits (or resubmits) their Ghana Card for review. All three
+// pieces are required in the final state: legal name, card number, card
+// photo. A resubmission may omit the photo to keep the one already on file
+// (e.g. when only the name needed correcting).
 router.post('/me/verify', requireAuth, async (req, res) => {
-  const { ghanaCardNum, verifyPhoto } = req.body;
-  if (!ghanaCardNum && !verifyPhoto) return res.status(400).json({ error: 'Add a Ghana Card number, a photo, or both.' });
-  const st = await Stylist.findById(req.stylistId);
-  if (ghanaCardNum) st.ghanaCardNum = ghanaCardNum;
-  if (verifyPhoto) st.verifyPhoto = verifyPhoto;
-  st.pendingReview = true;
-  await st.save();
-  res.json(publicStylist(st, true));
+  try {
+    const st = await Stylist.findById(req.stylistId);
+    if (!st) return res.status(404).json({ error: 'Account not found.' });
+    // A verified badge must always describe the details that were actually
+    // reviewed. Silently swapping name/card after approval would defeat it.
+    if (st.verified) return res.status(400).json({ error: 'Your identity is already verified. Contact Sheeba support if your details changed.' });
+
+    const nameCheck = cleanLegalName(req.body.legalFullName);
+    if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
+    const cardNum = normalizeGhanaCard(req.body.ghanaCardNum);
+    if (!cardNum) return res.status(400).json({ error: 'That doesn\u2019t look like a Ghana Card number. It should look like GHA-123456789-0.' });
+
+    const photo = req.body.verifyPhoto || st.verifyPhoto;
+    const photoProblem = checkCardPhoto(photo);
+    if (photoProblem) return res.status(400).json({ error: photoProblem });
+
+    st.legalFullName = nameCheck.name;
+    st.ghanaCardNum = cardNum;
+    st.verifyPhoto = photo;
+    st.pendingReview = true;
+    st.verificationSubmittedAt = Date.now();
+    st.verificationRejectedReason = null; // a fresh submission clears the old rejection
+    await st.save();
+    await notifyAllAdmins({ type: 'VERIFICATION_SUBMITTED', title: `ID verification submitted: ${st.salonName || st.name}`, entityType: 'admin', entityId: st._id.toString(), priority: 'action_required' });
+    res.json(publicStylist(st, true));
+  } catch (e) {
+    res.status(500).json({ error: 'Could not submit verification. Please try again.' });
+  }
 });
 
 // Admin: approve a stylist's ID verification (Ghana Card / photo review).
@@ -286,9 +313,52 @@ router.post('/me/verify', requireAuth, async (req, res) => {
 // a stylist can be ID-verified without their shop being publicly approved,
 // and vice versa. Do not merge these two routes.
 router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
-  const st = await Stylist.findByIdAndUpdate(req.params.id, { verified: true, pendingReview: false }, { new: true });
-  try { await AdminAction.create({ adminId: req.stylistId, action: 'VERIFICATION_APPROVED', targetType: 'stylist', targetId: req.params.id }); } catch (e) { /* non-fatal */ }
-  res.json(publicStylist(st, true));
+  try {
+    let st;
+    try { st = await Stylist.findById(req.params.id); } catch (e) { return res.status(404).json({ error: 'Account not found.' }); }
+    if (!st) return res.status(404).json({ error: 'Account not found.' });
+    if (!st.pendingReview) return res.status(400).json({ error: 'There is no pending verification for this account.' });
+    // Tight by design: approval is impossible without all three pieces the
+    // admin is supposed to compare. Older submissions made before the legal
+    // name existed must be rejected and resubmitted, not waved through.
+    if (!st.legalFullName || !st.ghanaCardNum || !st.verifyPhoto) {
+      return res.status(400).json({ error: 'This submission is missing the legal name, card number or card photo. Reject it and ask them to resubmit.' });
+    }
+    st.verified = true;
+    st.pendingReview = false;
+    st.verificationReviewedAt = Date.now();
+    st.verificationRejectedReason = null;
+    await st.save();
+    try { await AdminAction.create({ adminId: req.stylistId, action: 'VERIFICATION_APPROVED', targetType: 'stylist', targetId: st._id.toString() }); } catch (e) { /* non-fatal */ }
+    await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: 'VERIFICATION_APPROVED', title: 'Your identity is verified', message: 'Customers will now see the Verified badge on your shop.', entityType: 'shop', entityId: st._id.toString(), priority: 'important' });
+    res.json(publicStylist(st, true));
+  } catch (e) {
+    res.status(500).json({ error: 'Could not approve verification.' });
+  }
+});
+
+// Admin: reject a verification submission. A reason is mandatory: it is
+// shown to the stylist so they know exactly what to fix, and it is kept in
+// the audit log so every decision can be explained later.
+router.post('/:id/reject-verification', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 5) return res.status(400).json({ error: 'Give a clear reason so the stylist knows what to fix.' });
+    let st;
+    try { st = await Stylist.findById(req.params.id); } catch (e) { return res.status(404).json({ error: 'Account not found.' }); }
+    if (!st) return res.status(404).json({ error: 'Account not found.' });
+    if (!st.pendingReview) return res.status(400).json({ error: 'There is no pending verification for this account.' });
+    st.verified = false;
+    st.pendingReview = false;
+    st.verificationReviewedAt = Date.now();
+    st.verificationRejectedReason = reason.slice(0, 300);
+    await st.save();
+    try { await AdminAction.create({ adminId: req.stylistId, action: 'VERIFICATION_REJECTED', targetType: 'stylist', targetId: st._id.toString(), reason }); } catch (e) { /* non-fatal */ }
+    await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: 'VERIFICATION_REJECTED', title: 'Your ID verification needs another look', message: reason.slice(0, 120), entityType: 'shop', entityId: st._id.toString(), priority: 'important' });
+    res.json(publicStylist(st, true));
+  } catch (e) {
+    res.status(500).json({ error: 'Could not reject verification.' });
+  }
 });
 
 // Admin: approve a shop for public Discovery listing (the UNDER_REVIEW gate).

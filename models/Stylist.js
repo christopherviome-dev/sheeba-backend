@@ -32,6 +32,12 @@ const StylistSchema = new mongoose.Schema({
   ghanaCardNum: String,
   pendingReview: { type: Boolean, default: false },
   verified: { type: Boolean, default: false },
+  // Ghana Card verification, Layer 1. The legal name is private: only the
+  // account owner and admins ever see it (stripped in publicStylist).
+  legalFullName: { type: String, default: null },
+  verificationSubmittedAt: { type: Number, default: null },
+  verificationReviewedAt: { type: Number, default: null },
+  verificationRejectedReason: { type: String, default: null },
   color: String,
   styles: { type: [StyleSchema], default: [] },
   followers: { type: [String], default: [] }, // clientIds

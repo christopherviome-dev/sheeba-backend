@@ -9,7 +9,7 @@ const AdminActionSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
-      'SHOP_APPROVED', 'VERIFICATION_APPROVED', 'REPORT_RESOLVED', 'REPORT_STATE_CHANGED',
+      'SHOP_APPROVED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED', 'REPORT_RESOLVED', 'REPORT_STATE_CHANGED',
       'ACCOUNT_RESTRICTED', 'ACCOUNT_RESTORED',
     ],
   },
