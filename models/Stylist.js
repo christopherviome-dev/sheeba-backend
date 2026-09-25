@@ -38,6 +38,10 @@ const StylistSchema = new mongoose.Schema({
   verificationSubmittedAt: { type: Number, default: null },
   verificationReviewedAt: { type: Number, default: null },
   verificationRejectedReason: { type: String, default: null },
+  // Set when an admin issues a temporary password: the next login must
+  // choose a new one. Private (stripped from public responses).
+  mustChangePassword: { type: Boolean, default: false },
+  passwordChangedAt: { type: Number, default: null },
   color: String,
   styles: { type: [StyleSchema], default: [] },
   followers: { type: [String], default: [] }, // clientIds

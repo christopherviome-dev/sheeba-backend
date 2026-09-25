@@ -12,6 +12,7 @@ const Stylist = require('../models/Stylist');
 const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
 const { notify } = require('./notifications');
+const { phoneCandidates, checkNewPassword } = require('../lib/passwords');
 
 const router = express.Router();
 
@@ -31,10 +32,10 @@ router.post('/register', async (req, res) => {
   try {
     const { phone, password, name } = req.body;
     if (!phone || !password || !name) return res.status(400).json({ error: 'Phone, password, and name are required.' });
-    const existing = await Customer.findOne({ phone });
+    const existing = await Customer.findOne({ phone: { $in: phoneCandidates(phone) } });
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const passwordHash = await bcrypt.hash(password, 10);
-    const customer = await Customer.create({ phone, passwordHash, name });
+    const customer = await Customer.create({ phone: String(phone).trim(), passwordHash, name });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
@@ -45,7 +46,7 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
-    const customer = await Customer.findOne({ phone });
+    const customer = await Customer.findOne({ phone: { $in: phoneCandidates(phone) } });
     if (!customer) return res.status(401).json({ error: 'No account found with that phone number.' });
     const ok = await bcrypt.compare(password, customer.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
@@ -53,6 +54,23 @@ router.post('/login', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Login failed.' });
   }
+});
+
+// A logged-in customer changes their own password (current one required).
+router.post('/me/change-password', requireCustomerAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const problem = checkNewPassword(newPassword);
+  if (problem) return res.status(400).json({ error: problem });
+  const customer = await Customer.findById(req.customerId);
+  if (!customer) return res.status(404).json({ error: 'Account not found.' });
+  const ok = typeof currentPassword === 'string' && await bcrypt.compare(currentPassword, customer.passwordHash);
+  if (!ok) return res.status(400).json({ error: 'Your current password is incorrect.' });
+  if (await bcrypt.compare(newPassword, customer.passwordHash)) return res.status(400).json({ error: 'Choose a password different from the current one.' });
+  customer.passwordHash = await bcrypt.hash(newPassword, 10);
+  customer.mustChangePassword = false;
+  customer.passwordChangedAt = Date.now();
+  await customer.save();
+  res.json({ ok: true });
 });
 
 router.get('/me', requireCustomerAuth, async (req, res) => {

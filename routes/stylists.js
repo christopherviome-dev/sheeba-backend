@@ -23,6 +23,8 @@ function publicStylist(s, includeSensitive = false) {
     delete obj.verifyPhoto;
     delete obj.legalFullName;
     delete obj.verificationRejectedReason;
+    delete obj.mustChangePassword;
+    delete obj.passwordChangedAt;
   }
   return obj;
 }

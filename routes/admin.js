@@ -3,6 +3,10 @@ const AdminAction = require('../models/AdminAction');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeGhanaCard, compareNames } = require('../lib/identity');
+const bcrypt = require('bcryptjs');
+const Customer = require('../models/Customer');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
+const { generateTempPassword } = require('../lib/passwords');
 
 const router = express.Router();
 
@@ -55,6 +59,57 @@ router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Could not load the verification queue.' });
   }
+});
+
+// ---------- Password help ----------
+// Open "Forgot password?" requests, with the account's own name and the
+// phone number STORED ON THE ACCOUNT. The admin calls that number (never a
+// number supplied some other way) to confirm identity before issuing.
+router.get('/password-resets', requireAuth, requireAdmin, async (req, res) => {
+  const open = await PasswordResetRequest.find({ status: 'OPEN' }).sort({ createdAt: 1 });
+  const items = await Promise.all(open.map(async (r) => {
+    const Model = r.accountType === 'customer' ? Customer : Stylist;
+    let acc = null;
+    try { acc = await Model.findById(r.accountId, 'name salonName phone'); } catch (e) { /* stale id */ }
+    return { _id: r._id, accountType: r.accountType, createdAt: r.createdAt,
+      name: acc ? acc.name : null, salonName: acc ? acc.salonName : null, phone: acc ? acc.phone : null, accountFound: !!acc };
+  }));
+  res.json(items);
+});
+
+async function loadOpenRequest(id) {
+  let r = null;
+  try { r = await PasswordResetRequest.findById(id); } catch (e) { return null; }
+  return r && r.status === 'OPEN' ? r : null;
+}
+
+// Issue a temporary password. It is returned ONCE, in this response, for the
+// admin to read out over the phone; only its scrambled form is stored, and
+// the audit log records that a reset happened, never the password itself.
+router.post('/password-resets/:id/issue', requireAuth, requireAdmin, async (req, res) => {
+  const r = await loadOpenRequest(req.params.id);
+  if (!r) return res.status(404).json({ error: 'This request is no longer open.' });
+  const Model = r.accountType === 'customer' ? Customer : Stylist;
+  let acc = null;
+  try { acc = await Model.findById(r.accountId); } catch (e) { /* stale id */ }
+  if (!acc) return res.status(404).json({ error: 'That account no longer exists.' });
+  const tempPassword = generateTempPassword();
+  acc.passwordHash = await bcrypt.hash(tempPassword, 10);
+  acc.mustChangePassword = true;
+  await acc.save();
+  r.status = 'RESOLVED'; r.resolvedAt = Date.now(); r.resolvedBy = req.stylistId;
+  await r.save();
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'PASSWORD_RESET_ISSUED', targetType: r.accountType, targetId: r.accountId }); } catch (e) { /* non-fatal */ }
+  res.json({ tempPassword, name: acc.salonName || acc.name, phone: acc.phone });
+});
+
+router.post('/password-resets/:id/dismiss', requireAuth, requireAdmin, async (req, res) => {
+  const r = await loadOpenRequest(req.params.id);
+  if (!r) return res.status(404).json({ error: 'This request is no longer open.' });
+  r.status = 'DISMISSED'; r.resolvedAt = Date.now(); r.resolvedBy = req.stylistId;
+  await r.save();
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'PASSWORD_RESET_DISMISSED', targetType: 'password-reset', targetId: r._id.toString() }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true });
 });
 
 module.exports = router;

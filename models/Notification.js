@@ -13,6 +13,7 @@ const NotificationSchema = new mongoose.Schema({
       'PAYMENT_SUCCESSFUL', 'PAYMENT_FAILED', 'REFUND_SUCCESSFUL',
       'SERVICE_DUE_SOON', 'SERVICE_OVERDUE',
       'VERIFICATION_SUBMITTED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED',
+      'PASSWORD_RESET_REQUESTED',
     ],
   },
   title: { type: String, required: true },

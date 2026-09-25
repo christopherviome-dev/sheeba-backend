@@ -7,6 +7,9 @@ const CustomerSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true },
   passwordHash: { type: String, required: true },
   name: { type: String, required: true },
+  // Set when an admin issues a temporary password (see Stylist).
+  mustChangePassword: { type: Boolean, default: false },
+  passwordChangedAt: { type: Number, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.models.Customer || mongoose.model('Customer', CustomerSchema);
