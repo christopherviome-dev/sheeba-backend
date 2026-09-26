@@ -130,7 +130,16 @@ router.delete('/me/styles/:id', requireCustomerAuth, async (req, res) => {
 // of data that already exists. ----------
 router.get('/me/following', requireCustomerAuth, async (req, res) => {
   const shops = await Stylist.find({ followers: req.customerId, status: 'APPROVED' });
-  res.json(shops.map(s => { const o = s.toObject(); delete o.passwordHash; return o; }));
+  // PRIVACY FIX: this used to send each followed shop's whole record minus
+  // only the password, including the owner's Ghana Card number, ID photo and
+  // legal name. It now applies the same filter as the public shop listing
+  // (publicStylist in routes/stylists.js), so a customer sees exactly what
+  // anyone can already see, and skips restricted accounts.
+  const PRIVATE = ['passwordHash', 'ghanaCardNum', 'verifyPhoto', 'legalFullName', 'verificationRejectedReason',
+    'mustChangePassword', 'passwordChangedAt', 'idNumber', 'invitedByType', 'invitedById'];
+  res.json(shops
+    .filter((s) => (s.accountStatus || 'ACTIVE') === 'ACTIVE')
+    .map((s) => { const o = s.toObject(); PRIVATE.forEach((k) => delete o[k]); return o; }));
 });
 
 // ---------- Real service history — reuses the EXISTING Request model
