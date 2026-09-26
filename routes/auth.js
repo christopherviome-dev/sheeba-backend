@@ -7,7 +7,11 @@ const Customer = require('../models/Customer');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { notifyAllAdmins } = require('./notifications');
 const { requireAuth } = require('../middleware/auth');
-const { phoneCandidates, checkNewPassword } = require('../lib/passwords');
+const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/passwords');
+const { uniqueCode } = require('../lib/codes');
+const { COUNTRIES, checkCountry } = require('../lib/countries');
+const { recordInvite } = require('../lib/invites');
+const { notify } = require('./notifications');
 
 const router = express.Router();
 const COLORS = ['#e63875', '#4b2069', '#f5a623', '#b81e58', '#33124a', '#c97d0a'];
@@ -24,6 +28,9 @@ function publicStylist(s) {
 
 // Register a new stylist account (creates a bare account — they fill in salon details after)
 router.post('/register', async (req, res) => {
+  const countryCheck = checkCountry(req.body.country);
+  if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
+  const country = countryCheck.value;
   try {
     const { phone, password, name } = req.body;
     if (!phone || !password || !name) return res.status(400).json({ error: 'Phone, password, and name are required.' });
@@ -31,11 +38,14 @@ router.post('/register', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const passwordHash = await bcrypt.hash(password, 10);
     const stylist = await Stylist.create({
-      phone: String(phone).trim(), passwordHash, name,
+      phone: canonicalPhone(phone), passwordHash, name,
+      code: await uniqueCode(Stylist, Customer),
+      country, currency: COUNTRIES[country].currency, // a shop prices in its own country's currency
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
+    await recordInvite({ inviteCode: req.body.inviteCode, newType: 'stylist', newDoc: stylist, Stylist, Customer, notify });
     await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {

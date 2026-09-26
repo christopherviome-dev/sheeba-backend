@@ -14,6 +14,7 @@ const NotificationSchema = new mongoose.Schema({
       'SERVICE_DUE_SOON', 'SERVICE_OVERDUE',
       'VERIFICATION_SUBMITTED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED',
       'PASSWORD_RESET_REQUESTED',
+      'INVITE_JOINED', 'INVITE_REWARD_EARNED', 'INVITE_REWARD_PAID',
     ],
   },
   title: { type: String, required: true },

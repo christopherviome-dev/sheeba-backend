@@ -47,6 +47,10 @@ const StylistSchema = new mongoose.Schema({
   // How this professional works. Empty = not said yet. No one is forced to
   // have a physical shop: home visits, mobile and appointment-only are equal.
   workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
+  // Sheeba code (lib/codes.js) and who invited this account, if anyone.
+  code: { type: String, unique: true, sparse: true },
+  invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
+  invitedById: { type: String, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,
@@ -84,6 +88,13 @@ const StylistSchema = new mongoose.Schema({
   // Existing shops (created before this field existed) default to GHS,
   // matching every price already entered on the platform.
   currency: { type: String, default: 'GHS' },
+  // Which country this account is in (lib/countries.js). Older accounts: Ghana.
+  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
+  // Identity document type for verification (Ghana Card in Ghana; passport,
+  // driving licence etc. elsewhere). Ghana Card numbers stay in ghanaCardNum;
+  // other documents' numbers go in idNumber.
+  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', null], default: null },
+  idNumber: { type: String, default: null },
   // Real coordinates, set only when the professional explicitly opts in via
   // their own device's GPS — never required, never inferred from IP or
   // anything else. Absent for every existing shop until they choose to add it.

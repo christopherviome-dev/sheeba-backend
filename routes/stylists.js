@@ -6,8 +6,11 @@ const Activity = require('../models/Activity');
 const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
-const { normalizeGhanaCard, cleanLegalName, checkCardPhoto } = require('../lib/identity');
+const { normalizeGhanaCard, normalizeIdNumber, cleanLegalName, checkCardPhoto } = require('../lib/identity');
+const { COUNTRIES, countryOf } = require('../lib/countries');
 const V = require('../lib/validate');
+const Customer = require('../models/Customer');
+const { ensureCode } = require('../lib/codes');
 const AVAILABILITY = ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'];
 
 const router = express.Router();
@@ -22,10 +25,13 @@ function publicStylist(s, includeSensitive = false) {
   delete obj.passwordHash;
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
+    delete obj.idNumber;
     delete obj.verifyPhoto;
     delete obj.legalFullName;
     delete obj.verificationRejectedReason;
     delete obj.mustChangePassword;
+    delete obj.invitedByType;
+    delete obj.invitedById;
     delete obj.passwordChangedAt;
   }
   return obj;
@@ -69,51 +75,13 @@ router.get('/', async (req, res) => {
 // and nothing private or unused (no phone numbers, no follower or like ID
 // lists, no ID documents, no cover photos). Full photos load only on a shop's
 // own page, when someone actually opens it.
-const DISCOVER_SHOPS = 40;
-const DISCOVER_SERVICES = 12;
-const small = (photo, max) => (typeof photo === 'string' && photo.length <= max ? photo : null);
-
-function discoverCard(s, weekVisits) {
-  const work = (s.styles || [])
-    .filter((x) => x.active !== false)
-    .map((x) => ({
-      id: x.id,
-      name: x.name,
-      price: x.price,
-      duration: x.duration || null,
-      // Older photos have no thumbnail yet: use the photo itself only if it's small enough.
-      thumb: x.photoThumb || small(x.photo, 300 * 1024),
-      likeCount: (x.likes || []).length,
-      addedAt: x.addedAt || null,
-    }))
-    .sort((a, b) => (!!b.thumb - !!a.thumb) || (b.likeCount - a.likeCount) || ((b.addedAt || 0) - (a.addedAt || 0)))
-    .slice(0, DISCOVER_SERVICES);
-  const hasWork = work.some((w) => w.thumb);
-  // Quiet ranking signals: used for ORDER only, never shown or sent.
-  const score = (s.verified ? 3 : 0) + (hasWork ? 3 : 0)
-    + Math.min(s.groupPoints || 0, 100) / 20 + Math.min(weekVisits, 50) / 10;
-  return {
-    _score: score,
-    card: {
-      _id: s._id,
-      salonName: s.salonName,
-      name: s.name,
-      category: s.category,
-      area: s.area,
-      bio: s.bio ? String(s.bio).slice(0, 200) : null,
-      verified: !!s.verified,
-      workModes: s.workModes || [],
-      availability: s.availability,
-      location: s.location && s.location.lat != null ? { lat: s.location.lat, lng: s.location.lng } : null,
-      profilePhoto: small(s.profilePhoto, 150 * 1024),
-      popularThisWeek: weekVisits >= 3, // a yes/no, not the raw count
-      work,
-    },
-  };
-}
+const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
+const { accountFromRequest } = require('../lib/invites');
 
 router.get('/discover', async (req, res) => {
-  const shops = await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' });
+  // Shops in one country at a time, so prices share a currency and "near" means near.
+  const country = COUNTRIES[String(req.query.country || '').toUpperCase()] ? String(req.query.country).toUpperCase() : 'GH';
+  const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country);
   let visits = {};
   try {
     const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
@@ -134,6 +102,7 @@ router.get('/discover', async (req, res) => {
 router.get('/me', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
+  try { await ensureCode(st, Stylist, Customer); } catch (e) { /* a code can be made next time */ }
   res.json(publicStylist(st, true));
 });
 
@@ -424,15 +393,28 @@ router.post('/me/verify', requireAuth, async (req, res) => {
 
     const nameCheck = cleanLegalName(req.body.legalFullName);
     if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
-    const cardNum = normalizeGhanaCard(req.body.ghanaCardNum);
-    if (!cardNum) return res.status(400).json({ error: 'That doesn\u2019t look like a Ghana Card number. It should look like GHA-123456789-0.' });
+    // Which documents count depends on the professional's country.
+    const country = COUNTRIES[countryOf(st)];
+    const allowed = country.idDocuments.map(([k]) => k);
+    const idType = req.body.idType || (allowed.length === 1 ? allowed[0] : null);
+    if (!allowed.includes(idType)) return res.status(400).json({ error: `Choose an ID document accepted in ${country.name}.` });
+    let cardNum = null, idNumber = null;
+    if (idType === 'GHANA_CARD') {
+      cardNum = normalizeGhanaCard(req.body.ghanaCardNum !== undefined ? req.body.ghanaCardNum : req.body.idNumber);
+      if (!cardNum) return res.status(400).json({ error: 'That doesn\u2019t look like a Ghana Card number. It should look like GHA-123456789-0.' });
+    } else {
+      idNumber = normalizeIdNumber(req.body.idNumber);
+      if (!idNumber) return res.status(400).json({ error: 'Enter the document number exactly as printed (5 to 20 letters and numbers).' });
+    }
 
     const photo = req.body.verifyPhoto || st.verifyPhoto;
     const photoProblem = checkCardPhoto(photo);
     if (photoProblem) return res.status(400).json({ error: photoProblem });
 
     st.legalFullName = nameCheck.name;
+    st.idType = idType;
     st.ghanaCardNum = cardNum;
+    st.idNumber = idNumber;
     st.verifyPhoto = photo;
     st.pendingReview = true;
     st.verificationSubmittedAt = Date.now();
@@ -458,8 +440,8 @@ router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
     // Tight by design: approval is impossible without all three pieces the
     // admin is supposed to compare. Older submissions made before the legal
     // name existed must be rejected and resubmitted, not waved through.
-    if (!st.legalFullName || !st.ghanaCardNum || !st.verifyPhoto) {
-      return res.status(400).json({ error: 'This submission is missing the legal name, card number or card photo. Reject it and ask them to resubmit.' });
+    if (!st.legalFullName || !(st.ghanaCardNum || st.idNumber) || !st.verifyPhoto) {
+      return res.status(400).json({ error: 'This submission is missing the legal name, document number or document photo. Reject it and ask them to resubmit.' });
     }
     st.verified = true;
     st.pendingReview = false;
@@ -590,6 +572,14 @@ router.get('/:id/stats', requireAuth, async (req, res) => {
 router.post('/:id/follow', async (req, res) => {
   const { clientId } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
+  // Following as a real customer account needs that customer's own login;
+  // otherwise anyone could add or remove shops from someone's Saved list.
+  let isCustomerId = false;
+  try { isCustomerId = !!(await Customer.exists({ _id: clientId })); } catch (e) { /* not an account id: an anonymous browser id */ }
+  if (isCustomerId) {
+    const who = accountFromRequest(req);
+    if (!who || who.type !== 'customer' || who.id !== String(clientId)) return res.status(401).json({ error: 'Please log in to save shops to your account.' });
+  }
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   const i = st.followers.indexOf(clientId);
@@ -598,6 +588,8 @@ router.post('/:id/follow', async (req, res) => {
   await st.save();
   if (wasNewFollow) { try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'FOLLOW_RECEIVED' }); } catch (e) { /* non-fatal */ } }
   const updated = await recalculateGroupPoints(st._id);
+  // ?lean=1 (the new site): just the result. The old reply stays for the older site.
+  if (req.query.lean) return res.json({ following: wasNewFollow, followerCount: updated.followers.length });
   res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record — never their private ID data
 });
 
