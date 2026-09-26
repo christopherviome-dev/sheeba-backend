@@ -73,7 +73,9 @@ const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : undefined
 // Submit a booking request to a specific professional (or an open request).
 router.post('/', async (req, res) => {
   try {
-    const { stylistId, styleId, clientId, meet, emergency, ref } = req.body;
+    const { stylistId, styleId, clientId, ref } = req.body;
+    const meet = ['provider', 'client'].includes(req.body.meet) ? req.body.meet : null;
+    const emergency = clip(req.body.emergency, 120); // an emergency contact: a name and number
     const clientName = clip(req.body.clientName, 100);
     const clientPhone = clip(req.body.clientPhone, 30);
     const date = clip(req.body.date, 100);

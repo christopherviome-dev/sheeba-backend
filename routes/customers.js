@@ -16,6 +16,8 @@ const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/pa
 const { uniqueCode, ensureCode } = require('../lib/codes');
 const { recordInvite } = require('../lib/invites');
 const { checkCountry } = require('../lib/countries');
+const V = require('../lib/validate');
+const { discoverCard } = require('../lib/discover');
 
 const router = express.Router();
 
@@ -137,7 +139,10 @@ router.delete('/me/styles/:id', requireCustomerAuth, async (req, res) => {
 // of data that already exists. ----------
 router.get('/me/following', requireCustomerAuth, async (req, res) => {
   const shops = await Stylist.find({ followers: req.customerId, status: 'APPROVED' });
-  res.json(shops.map(s => { const o = s.toObject(); delete o.passwordHash; return o; }));
+  // The same lean, public-safe card as Discover. (This used to send each
+  // shop's whole record minus only the password, including the owner's ID
+  // documents and legal name, to any customer who followed them.)
+  res.json(shops.filter((s) => (s.accountStatus || 'ACTIVE') === 'ACTIVE').map((s) => discoverCard(s).card));
 });
 
 // ---------- Real service history — reuses the EXISTING Request model
@@ -145,7 +150,17 @@ router.get('/me/following', requireCustomerAuth, async (req, res) => {
 // separate Service Record model invented. ----------
 router.get('/me/history', requireCustomerAuth, async (req, res) => {
   const requests = await Request.find({ clientId: req.customerId }).sort({ updatedAt: -1 });
-  res.json(requests);
+  // Attach each shop's NAME only (one lean lookup), so the app can show who
+  // each appointment is with without downloading whole shops and photos.
+  const ids = [...new Set(requests.map((r) => r.stylistId).filter(Boolean))];
+  const shops = ids.length ? await Stylist.find({ _id: { $in: ids } }, 'name salonName availability status accountStatus') : [];
+  const byId = Object.fromEntries(shops.map((s) => [s._id.toString(), s]));
+  res.json(requests.map((r) => {
+    const o = r.toObject ? r.toObject() : r;
+    const s = byId[String(r.stylistId)];
+    return { ...o, shop: s ? { name: s.salonName || s.name,
+      bookable: s.status === 'APPROVED' && (s.accountStatus || 'ACTIVE') === 'ACTIVE' && s.availability !== 'UNAVAILABLE' && s.availability !== 'AWAY' } : null };
+  }));
 });
 
 // "Book This Again" — uses the OLD request only as a starting point for
@@ -157,10 +172,26 @@ router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) =
   if (!old || old.clientId !== req.customerId) return res.status(403).json({ error: 'Not your service record.' });
   if (!old.stylistId) return res.status(400).json({ error: 'That was an open request with no specific shop.' });
   const stylist = await Stylist.findById(old.stylistId);
-  if (!stylist) return res.status(404).json({ error: 'That shop is no longer available.' });
+  if (!stylist || stylist.status !== 'APPROVED' || (stylist.accountStatus || 'ACTIVE') !== 'ACTIVE') {
+    return res.status(404).json({ error: 'That shop is no longer available.' });
+  }
+  if (stylist.availability === 'UNAVAILABLE' || stylist.availability === 'AWAY') {
+    return res.status(400).json({ error: 'This professional isn\u2019t taking requests right now.' });
+  }
   const currentStyle = old.styleId ? (stylist.styles || []).find(s => s.id === old.styleId && s.active !== false) : null;
   const customer = await Customer.findById(req.customerId);
-  const { date, note, meet, emergency, budget, area } = req.body;
+  const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : null);
+  const date = clip(req.body.date, 100), note = clip(req.body.note, 1000), emergency = clip(req.body.emergency, 120);
+  const budget = clip(req.body.budget, 50), area = clip(req.body.area, 100);
+  const meet = ['provider', 'client'].includes(req.body.meet) ? req.body.meet : null;
+  let preferredAt = null; // same rule as a normal booking: a real moment within the next year
+  if (req.body.preferredAt !== undefined && req.body.preferredAt !== null) {
+    const t = Number(req.body.preferredAt), now = Date.now();
+    if (!Number.isFinite(t) || t < now - 60 * 60 * 1000 || t > now + 366 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'Please choose a date and time in the future.' });
+    }
+    preferredAt = t;
+  }
   const r = await Request.create({
     stylistId: old.stylistId,
     styleId: currentStyle ? currentStyle.id : null,
@@ -171,7 +202,7 @@ router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) =
     clientId: req.customerId,
     clientName: customer ? customer.name : old.clientName,
     clientPhone: old.clientPhone,
-    date, note, meet, emergency, budget, area,
+    date, preferredAt, note, meet, emergency, budget, area,
     status: 'pending',
   });
   try { await Activity.create({ stylistId: old.stylistId, clientId: req.customerId, type: 'REQUEST_CREATED', meta: { requestId: r._id.toString(), bookAgain: true } }); } catch (e) { /* non-fatal */ }
@@ -217,8 +248,16 @@ router.patch('/me/style-records/:id', requireCustomerAuth, async (req, res) => {
   const record = await StyleRecord.findById(req.params.id);
   if (!record || record.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
   const { finishedPhoto, notes } = req.body;
-  if (finishedPhoto !== undefined) record.finishedPhoto = finishedPhoto;
-  if (notes !== undefined) record.notes = notes;
+  if (finishedPhoto !== undefined) {
+    const p = V.photo(finishedPhoto, 'service');
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    record.finishedPhoto = p.value;
+  }
+  if (notes !== undefined) {
+    const n = V.longText(notes, { label: 'Notes', max: 500 });
+    if (!n.ok) return res.status(400).json({ error: n.error });
+    record.notes = n.value;
+  }
   await record.save();
   res.json(record);
 });
@@ -230,8 +269,16 @@ router.patch('/me/style-records/by-request/:requestId', requireCustomerAuth, asy
   const record = await StyleRecord.findOne({ requestId: req.params.requestId, customerId: req.customerId });
   if (!record) return res.status(404).json({ error: 'No style record found for that service yet.' });
   const { finishedPhoto, notes } = req.body;
-  if (finishedPhoto !== undefined) record.finishedPhoto = finishedPhoto;
-  if (notes !== undefined) record.notes = notes;
+  if (finishedPhoto !== undefined) {
+    const p = V.photo(finishedPhoto, 'service');
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    record.finishedPhoto = p.value;
+  }
+  if (notes !== undefined) {
+    const n = V.longText(notes, { label: 'Notes', max: 500 });
+    if (!n.ok) return res.status(400).json({ error: n.error });
+    record.notes = n.value;
+  }
   try { await Activity.create({ clientId: req.customerId, type: 'STYLE_SAVED', meta: { styleRecordId: record._id.toString() } }); } catch (e) { /* non-fatal */ }
   await record.save();
   res.json(record);
@@ -239,11 +286,20 @@ router.patch('/me/style-records/by-request/:requestId', requireCustomerAuth, asy
 
 // ---------- Repeat preferences: customer-chosen, never inferred ----------
 router.post('/me/repeat-preferences', requireCustomerAuth, async (req, res) => {
-  const { stylistId, styleId, serviceName, intervalDays, lastCompletedAt } = req.body;
-  if (!stylistId || !intervalDays) return res.status(400).json({ error: 'A shop and an interval are required.' });
+  const { stylistId, styleId } = req.body;
+  const intervalDays = Number(req.body.intervalDays);
+  if (!stylistId) return res.status(400).json({ error: 'A shop is required.' });
+  if (!Number.isInteger(intervalDays) || intervalDays < 7 || intervalDays > 365) return res.status(400).json({ error: 'Choose a reminder between 1 week and 1 year.' });
+  let shop = null;
+  try { shop = await Stylist.findById(stylistId); } catch (e) { /* bad id */ }
+  if (!shop) return res.status(404).json({ error: 'That shop no longer exists.' });
+  const serviceName = typeof req.body.serviceName === 'string' ? req.body.serviceName.trim().slice(0, 60) : null;
+  // When the service was last done: a real past moment (within 2 years), else now.
+  const t = Number(req.body.lastCompletedAt), now = Date.now();
+  const lastCompletedAt = Number.isFinite(t) && t <= now && t > now - 2 * 365 * 24 * 3600 * 1000 ? t : now;
   const pref = await RepeatPreference.findOneAndUpdate(
     { customerId: req.customerId, stylistId, styleId: styleId || null },
-    { serviceName, intervalDays, lastCompletedAt: lastCompletedAt || Date.now(), updatedAt: Date.now(), remindersEnabled: true, lastNotifiedStatus: null },
+    { serviceName, intervalDays, lastCompletedAt, updatedAt: Date.now(), remindersEnabled: true, lastNotifiedStatus: null },
     { upsert: true, new: true }
   );
   res.json(pref);
@@ -274,9 +330,13 @@ router.get('/me/repeat-preferences', requireCustomerAuth, async (req, res) => {
 router.put('/me/repeat-preferences/:id', requireCustomerAuth, async (req, res) => {
   const pref = await RepeatPreference.findById(req.params.id);
   if (!pref || pref.customerId !== req.customerId) return res.status(404).json({ error: 'Not found.' });
-  const { intervalDays, remindersEnabled } = req.body;
-  if (intervalDays !== undefined) pref.intervalDays = intervalDays;
-  if (remindersEnabled !== undefined) pref.remindersEnabled = remindersEnabled;
+  const { remindersEnabled } = req.body;
+  if (req.body.intervalDays !== undefined) {
+    const d = Number(req.body.intervalDays);
+    if (!Number.isInteger(d) || d < 7 || d > 365) return res.status(400).json({ error: 'Choose a reminder between 1 week and 1 year.' });
+    pref.intervalDays = d;
+  }
+  if (remindersEnabled !== undefined) pref.remindersEnabled = !!remindersEnabled;
   pref.updatedAt = Date.now();
   await pref.save();
   res.json({ ...pref.toObject(), ...RepeatPreference.computeStatus(pref) });

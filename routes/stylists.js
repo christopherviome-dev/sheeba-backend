@@ -75,50 +75,8 @@ router.get('/', async (req, res) => {
 // and nothing private or unused (no phone numbers, no follower or like ID
 // lists, no ID documents, no cover photos). Full photos load only on a shop's
 // own page, when someone actually opens it.
-const DISCOVER_SHOPS = 40;
-const DISCOVER_SERVICES = 12;
-const small = (photo, max) => (typeof photo === 'string' && photo.length <= max ? photo : null);
-
-function discoverCard(s, weekVisits) {
-  const work = (s.styles || [])
-    .filter((x) => x.active !== false)
-    .map((x) => ({
-      id: x.id,
-      name: x.name,
-      price: x.price,
-      duration: x.duration || null,
-      // Older photos have no thumbnail yet: use the photo itself only if it's small enough.
-      thumb: x.photoThumb || small(x.photo, 300 * 1024),
-      likeCount: (x.likes || []).length,
-      addedAt: x.addedAt || null,
-    }))
-    .sort((a, b) => (!!b.thumb - !!a.thumb) || (b.likeCount - a.likeCount) || ((b.addedAt || 0) - (a.addedAt || 0)))
-    .slice(0, DISCOVER_SERVICES);
-  const hasWork = work.some((w) => w.thumb);
-  // Quiet ranking signals: used for ORDER only, never shown or sent.
-  const score = (s.verified ? 3 : 0) + (hasWork ? 3 : 0)
-    + Math.min(s.groupPoints || 0, 100) / 20 + Math.min(weekVisits, 50) / 10;
-  return {
-    _score: score,
-    card: {
-      _id: s._id,
-      salonName: s.salonName,
-      name: s.name,
-      category: s.category,
-      area: s.area,
-      bio: s.bio ? String(s.bio).slice(0, 200) : null,
-      verified: !!s.verified,
-      country: countryOf(s),
-      currency: s.currency || COUNTRIES[countryOf(s)].currency,
-      workModes: s.workModes || [],
-      availability: s.availability,
-      location: s.location && s.location.lat != null ? { lat: s.location.lat, lng: s.location.lng } : null,
-      profilePhoto: small(s.profilePhoto, 150 * 1024),
-      popularThisWeek: weekVisits >= 3, // a yes/no, not the raw count
-      work,
-    },
-  };
-}
+const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
+const { accountFromRequest } = require('../lib/invites');
 
 router.get('/discover', async (req, res) => {
   // Shops in one country at a time, so prices share a currency and "near" means near.
@@ -614,6 +572,14 @@ router.get('/:id/stats', requireAuth, async (req, res) => {
 router.post('/:id/follow', async (req, res) => {
   const { clientId } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
+  // Following as a real customer account needs that customer's own login;
+  // otherwise anyone could add or remove shops from someone's Saved list.
+  let isCustomerId = false;
+  try { isCustomerId = !!(await Customer.exists({ _id: clientId })); } catch (e) { /* not an account id: an anonymous browser id */ }
+  if (isCustomerId) {
+    const who = accountFromRequest(req);
+    if (!who || who.type !== 'customer' || who.id !== String(clientId)) return res.status(401).json({ error: 'Please log in to save shops to your account.' });
+  }
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   const i = st.followers.indexOf(clientId);
@@ -622,6 +588,8 @@ router.post('/:id/follow', async (req, res) => {
   await st.save();
   if (wasNewFollow) { try { await Activity.create({ stylistId: st._id.toString(), clientId, type: 'FOLLOW_RECEIVED' }); } catch (e) { /* non-fatal */ } }
   const updated = await recalculateGroupPoints(st._id);
+  // ?lean=1 (the new site): just the result. The old reply stays for the older site.
+  if (req.query.lean) return res.json({ following: wasNewFollow, followerCount: updated.followers.length });
   res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record — never their private ID data
 });
 
