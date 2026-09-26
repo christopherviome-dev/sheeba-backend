@@ -7,6 +7,10 @@ const StyleSchema = new mongoose.Schema({
   duration: String,
   desc: String,
   photo: String, // base64 data URL — fine at this scale, move to cloud storage later if it grows
+  // Small version of `photo` for Discover, so browsing costs customers little
+  // mobile data (~30 KB instead of ~150 KB). Made by the app at upload time.
+  photoThumb: { type: String, default: null },
+  addedAt: { type: Number, default: null }, // when the service was added ("New looks")
   colorTag: String,
   active: { type: Boolean, default: true },
   // Payment is opt-in per service, per the trust-first philosophy — every
@@ -40,6 +44,9 @@ const StylistSchema = new mongoose.Schema({
   verificationRejectedReason: { type: String, default: null },
   // Set when an admin issues a temporary password: the next login must
   // choose a new one. Private (stripped from public responses).
+  // How this professional works. Empty = not said yet. No one is forced to
+  // have a physical shop: home visits, mobile and appointment-only are equal.
+  workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,

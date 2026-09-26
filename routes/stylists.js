@@ -7,6 +7,8 @@ const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
 const { normalizeGhanaCard, cleanLegalName, checkCardPhoto } = require('../lib/identity');
+const V = require('../lib/validate');
+const AVAILABILITY = ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'];
 
 const router = express.Router();
 
@@ -61,6 +63,74 @@ router.get('/', async (req, res) => {
 });
 
 // Auth: get my own record
+// ---------- Discover feed ----------
+// A lean public feed for browsing. Deliberately small, because customers pay
+// for mobile data by the megabyte: small thumbnails instead of full photos,
+// and nothing private or unused (no phone numbers, no follower or like ID
+// lists, no ID documents, no cover photos). Full photos load only on a shop's
+// own page, when someone actually opens it.
+const DISCOVER_SHOPS = 40;
+const DISCOVER_SERVICES = 12;
+const small = (photo, max) => (typeof photo === 'string' && photo.length <= max ? photo : null);
+
+function discoverCard(s, weekVisits) {
+  const work = (s.styles || [])
+    .filter((x) => x.active !== false)
+    .map((x) => ({
+      id: x.id,
+      name: x.name,
+      price: x.price,
+      duration: x.duration || null,
+      // Older photos have no thumbnail yet: use the photo itself only if it's small enough.
+      thumb: x.photoThumb || small(x.photo, 300 * 1024),
+      likeCount: (x.likes || []).length,
+      addedAt: x.addedAt || null,
+    }))
+    .sort((a, b) => (!!b.thumb - !!a.thumb) || (b.likeCount - a.likeCount) || ((b.addedAt || 0) - (a.addedAt || 0)))
+    .slice(0, DISCOVER_SERVICES);
+  const hasWork = work.some((w) => w.thumb);
+  // Quiet ranking signals: used for ORDER only, never shown or sent.
+  const score = (s.verified ? 3 : 0) + (hasWork ? 3 : 0)
+    + Math.min(s.groupPoints || 0, 100) / 20 + Math.min(weekVisits, 50) / 10;
+  return {
+    _score: score,
+    card: {
+      _id: s._id,
+      salonName: s.salonName,
+      name: s.name,
+      category: s.category,
+      area: s.area,
+      bio: s.bio ? String(s.bio).slice(0, 200) : null,
+      verified: !!s.verified,
+      workModes: s.workModes || [],
+      availability: s.availability,
+      location: s.location && s.location.lat != null ? { lat: s.location.lat, lng: s.location.lng } : null,
+      profilePhoto: small(s.profilePhoto, 150 * 1024),
+      popularThisWeek: weekVisits >= 3, // a yes/no, not the raw count
+      work,
+    },
+  };
+}
+
+router.get('/discover', async (req, res) => {
+  const shops = await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' });
+  let visits = {};
+  try {
+    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    const agg = await Activity.aggregate([
+      { $match: { type: 'SHOP_VISITED', createdAt: { $gt: weekAgo } } },
+      { $group: { _id: '$stylistId', n: { $sum: 1 } } },
+    ]);
+    visits = Object.fromEntries(agg.map((a) => [String(a._id), a.n]));
+  } catch (e) { /* popularity is optional; the feed still works without it */ }
+  const cards = shops
+    .map((s) => discoverCard(s, visits[s._id.toString()] || 0))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, DISCOVER_SHOPS)
+    .map((x) => x.card);
+  res.json(cards);
+});
+
 router.get('/me', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
@@ -209,25 +279,47 @@ async function recalculateGroupPoints(stylistId) {
 
 // Auth: update my page (salon name, category, area, bio, cover photo)
 router.put('/me', requireAuth, async (req, res) => {
-  const { salonName, name, category, area, bio, coverPhoto, profilePhoto, brandColor, availability, lat, lng } = req.body;
+  const b = req.body || {};
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
-  if (salonName !== undefined) st.salonName = salonName;
-  if (name !== undefined) st.name = name;
+  // Every field is optional (only what's sent changes), but anything sent is checked.
+  const checks = {
+    salonName: () => V.text(b.salonName, { label: 'Shop name', max: 60 }),
+    name: () => V.text(b.name, { label: 'Your name', min: 2, max: 60 }),
+    category: () => V.text(b.category, { label: 'Category', max: 40 }),
+    area: () => V.text(b.area, { label: 'Area', max: 60 }),
+    bio: () => V.longText(b.bio, { label: 'Description', max: 600 }),
+    profilePhoto: () => V.photo(b.profilePhoto, 'profile'),
+    coverPhoto: () => V.photo(b.coverPhoto, 'profile'),
+    workModes: () => V.workModes(b.workModes),
+  };
+  const changes = {};
+  for (const [field, check] of Object.entries(checks)) {
+    if (b[field] === undefined) continue;
+    const r = check();
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    changes[field] = r.value;
+  }
+  if (b.availability !== undefined) {
+    if (!AVAILABILITY.includes(b.availability)) return res.status(400).json({ error: 'Unknown availability.' });
+    changes.availability = b.availability;
+  }
+  // Check the storage total BEFORE changing anything.
+  let total = V.totalPhotoChars(st);
+  for (const f of ['profilePhoto', 'coverPhoto']) {
+    if (f in changes) total += V.photoLen(changes[f]) - V.photoLen(st[f]);
+  }
+  if (total > V.MAX_TOTAL_PHOTO_CHARS) return res.status(400).json({ error: V.STORAGE_FULL });
+  Object.assign(st, changes);
+  const { lat, lng } = b;
   if (lat !== undefined && lng !== undefined && typeof lat === 'number' && typeof lng === 'number' && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
     st.location = { lat, lng };
   }
-  if (category !== undefined) st.category = category;
-  if (area !== undefined) st.area = area;
-  if (bio !== undefined) st.bio = bio;
-  if (coverPhoto !== undefined) st.coverPhoto = coverPhoto;
-  if (profilePhoto !== undefined) st.profilePhoto = profilePhoto;
-  if (availability !== undefined) st.availability = availability;
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
-  if (brandColor !== undefined) {
+  if (b.brandColor !== undefined) {
     if (updated.groupPoints >= 40) {
-      updated.brandColor = brandColor;
+      updated.brandColor = b.brandColor;
       await updated.save();
     }
     // else: silently ignored — perk not yet earned, matches the frontend's own gate
@@ -242,13 +334,43 @@ router.post('/me/touch', requireAuth, async (req, res) => {
 });
 
 // Auth: add a style/service
+// Services (each can carry a photo of the work). Checked the same way as the profile.
+function checkService(b, { partial }) {
+  const out = {};
+  const checks = {
+    name: () => V.text(b.name, { label: 'Service name', min: 2, max: 60 }),
+    price: () => V.price(b.price),
+    duration: () => V.text(b.duration, { label: 'Duration', max: 30 }),
+    desc: () => V.longText(b.desc, { label: 'Description', max: 300 }),
+    photo: () => V.photo(b.photo, 'service'),
+    photoThumb: () => V.photo(b.photoThumb, 'thumb'),
+  };
+  for (const [field, check] of Object.entries(checks)) {
+    if (b[field] === undefined) {
+      if (!partial && (field === 'name' || field === 'price')) return { error: field === 'name' ? 'Service name is required.' : 'Price is required.' };
+      continue;
+    }
+    const r = check();
+    if (!r.ok) return { error: r.error };
+    out[field] = r.value;
+  }
+  // A thumbnail always belongs to the current photo: removing or replacing
+  // the photo without a new thumbnail clears the old one.
+  if ('photo' in out && !('photoThumb' in out)) out.photoThumb = null;
+  if (out.photo === null) out.photoThumb = null;
+  return { value: out };
+}
+
 router.post('/me/styles', requireAuth, async (req, res) => {
-  const { name, price, duration, desc, photo } = req.body;
-  if (!name || !price) return res.status(400).json({ error: 'Name and price are required.' });
   const st = await Stylist.findById(req.stylistId);
-  st.styles.push({ id: uid('sty'), name, price, duration, desc, photo, likes: [] });
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  if ((st.styles || []).length >= V.MAX_SERVICES) return res.status(400).json({ error: `You can list up to ${V.MAX_SERVICES} services. Remove one to add another.` });
+  const c = checkService(req.body || {}, { partial: false });
+  if (c.error) return res.status(400).json({ error: c.error });
+  if (V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) return res.status(400).json({ error: V.STORAGE_FULL });
+  st.styles.push({ id: uid('sty'), ...c.value, likes: [], addedAt: Date.now() });
   await st.save();
-  try { await Activity.create({ stylistId: st._id.toString(), type: photo ? 'WORK_UPLOADED' : 'SERVICE_ADDED' }); } catch (e) { /* non-fatal */ }
+  try { await Activity.create({ stylistId: st._id.toString(), type: c.value.photo ? 'WORK_UPLOADED' : 'SERVICE_ADDED' }); } catch (e) { /* non-fatal */ }
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated, true));
 });
@@ -256,11 +378,21 @@ router.post('/me/styles', requireAuth, async (req, res) => {
 // Auth: update a style's price
 router.put('/me/styles/:styleId', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
   const style = st.styles.find(s => s.id === req.params.styleId);
-  if (!style) return res.status(404).json({ error: 'Style not found.' });
-  if (req.body.price !== undefined) style.price = req.body.price;
+  if (!style) return res.status(404).json({ error: 'Service not found.' });
+  const c = checkService(req.body || {}, { partial: true });
+  if (c.error) return res.status(400).json({ error: c.error });
+  if ('photo' in c.value && V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb)
+      - V.photoLen(style.photo) - V.photoLen(style.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) {
+    return res.status(400).json({ error: V.STORAGE_FULL });
+  }
+  const addedPhoto = c.value.photo && c.value.photo !== style.photo;
+  Object.assign(style, c.value);
   if (req.body.active !== undefined) style.active = !!req.body.active;
+  st.markModified('styles');
   await st.save();
+  if (addedPhoto) { try { await Activity.create({ stylistId: st._id.toString(), type: 'WORK_UPLOADED' }); } catch (e) { /* non-fatal */ } }
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated, true));
 });
@@ -268,7 +400,10 @@ router.put('/me/styles/:styleId', requireAuth, async (req, res) => {
 // Auth: remove a style
 router.delete('/me/styles/:styleId', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const before = st.styles.length;
   st.styles = st.styles.filter(s => s.id !== req.params.styleId);
+  if (st.styles.length === before) return res.status(404).json({ error: 'Service not found.' });
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
   res.json(publicStylist(updated, true));
@@ -478,6 +613,9 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
   if (i >= 0) style.likes.splice(i, 1); else style.likes.push(clientId);
   await st.save();
   const updated = await recalculateGroupPoints(st._id);
+  // ?lean=1 (the new site): just the result, not the whole shop and its photos.
+  // Without it, the old reply is kept so the older site's like button still works.
+  if (req.query.lean) return res.json({ liked: i < 0, likeCount: style.likes.length });
   res.json(publicStylist(updated, false)); // public/anonymous action on someone else's record
 });
 
