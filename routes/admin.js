@@ -2,7 +2,14 @@ const express = require('express');
 const AdminAction = require('../models/AdminAction');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
-const { normalizeGhanaCard, compareNames } = require('../lib/identity');
+const { normalizeGhanaCard, normalizeIdNumber, compareNames } = require('../lib/identity');
+const { COUNTRIES, countryOf } = require('../lib/countries');
+// One key per real document, whatever its type, for duplicate detection.
+const docKey = (s) => {
+  if (s.ghanaCardNum) return 'GHANA_CARD:' + (normalizeGhanaCard(s.ghanaCardNum) || String(s.ghanaCardNum).toUpperCase().trim());
+  if (s.idNumber) return (s.idType || 'ID') + ':' + (normalizeIdNumber(s.idNumber) || String(s.idNumber).toUpperCase());
+  return null;
+};
 const bcrypt = require('bcryptjs');
 const Customer = require('../models/Customer');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
@@ -28,30 +35,33 @@ router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
     // At today's scale, comparing in memory is fine and also catches card
     // numbers saved before normalization existed. At large scale this
     // should become an indexed, normalized field.
-    const withCards = await Stylist.find({ ghanaCardNum: { $nin: [null, ''] } }, '_id name salonName ghanaCardNum verified');
-    const cardKey = (n) => normalizeGhanaCard(n) || String(n || '').toUpperCase().trim();
+    const withCards = (await Stylist.find({}, '_id name salonName ghanaCardNum idType idNumber verified')).filter((s) => docKey(s));
     const byCard = new Map();
     for (const s of withCards) {
-      const key = cardKey(s.ghanaCardNum);
+      const key = docKey(s);
       if (!byCard.has(key)) byCard.set(key, []);
       byCard.get(key).push(s);
     }
     res.json(pending.map((s) => {
-      const others = s.ghanaCardNum
-        ? (byCard.get(cardKey(s.ghanaCardNum)) || []).filter((o) => o._id.toString() !== s._id.toString())
+      const key = docKey(s);
+      const others = key
+        ? (byCard.get(key) || []).filter((o) => o._id.toString() !== s._id.toString())
         : [];
       const missing = [];
       if (!s.legalFullName) missing.push('legal name');
-      if (!s.ghanaCardNum) missing.push('card number');
-      if (!s.verifyPhoto) missing.push('card photo');
+      if (!s.ghanaCardNum && !s.idNumber) missing.push('document number');
+      if (!s.verifyPhoto) missing.push('document photo');
       return {
         _id: s._id,
         name: s.name,
         salonName: s.salonName,
         phone: s.phone,
         legalFullName: s.legalFullName,
-        ghanaCardNum: s.ghanaCardNum,
-        cardFormatValid: !!normalizeGhanaCard(s.ghanaCardNum),
+        country: COUNTRIES[countryOf(s)].name,
+        idType: s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null),
+        idLabel: ((COUNTRIES[countryOf(s)].idDocuments.find(([k]) => k === (s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null))) || [null, 'ID document'])[1]),
+        ghanaCardNum: s.ghanaCardNum || s.idNumber, // the document number, whatever its type (name kept for the app)
+        cardFormatValid: s.ghanaCardNum ? !!normalizeGhanaCard(s.ghanaCardNum) : !!normalizeIdNumber(s.idNumber),
         verifyPhoto: s.verifyPhoto,
         submittedAt: s.verificationSubmittedAt,
         nameCheck: s.legalFullName ? compareNames(s.name, s.legalFullName) : 'UNKNOWN',

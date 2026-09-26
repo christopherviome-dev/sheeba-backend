@@ -88,6 +88,13 @@ const StylistSchema = new mongoose.Schema({
   // Existing shops (created before this field existed) default to GHS,
   // matching every price already entered on the platform.
   currency: { type: String, default: 'GHS' },
+  // Which country this account is in (lib/countries.js). Older accounts: Ghana.
+  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
+  // Identity document type for verification (Ghana Card in Ghana; passport,
+  // driving licence etc. elsewhere). Ghana Card numbers stay in ghanaCardNum;
+  // other documents' numbers go in idNumber.
+  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', null], default: null },
+  idNumber: { type: String, default: null },
   // Real coordinates, set only when the professional explicitly opts in via
   // their own device's GPS — never required, never inferred from IP or
   // anything else. Absent for every existing shop until they choose to add it.

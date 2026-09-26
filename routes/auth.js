@@ -7,8 +7,9 @@ const Customer = require('../models/Customer');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { notifyAllAdmins } = require('./notifications');
 const { requireAuth } = require('../middleware/auth');
-const { phoneCandidates, checkNewPassword } = require('../lib/passwords');
+const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/passwords');
 const { uniqueCode } = require('../lib/codes');
+const { COUNTRIES, checkCountry } = require('../lib/countries');
 const { recordInvite } = require('../lib/invites');
 const { notify } = require('./notifications');
 
@@ -27,6 +28,9 @@ function publicStylist(s) {
 
 // Register a new stylist account (creates a bare account — they fill in salon details after)
 router.post('/register', async (req, res) => {
+  const countryCheck = checkCountry(req.body.country);
+  if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
+  const country = countryCheck.value;
   try {
     const { phone, password, name } = req.body;
     if (!phone || !password || !name) return res.status(400).json({ error: 'Phone, password, and name are required.' });
@@ -34,8 +38,9 @@ router.post('/register', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const passwordHash = await bcrypt.hash(password, 10);
     const stylist = await Stylist.create({
-      phone: String(phone).trim(), passwordHash, name,
+      phone: canonicalPhone(phone), passwordHash, name,
       code: await uniqueCode(Stylist, Customer),
+      country, currency: COUNTRIES[country].currency, // a shop prices in its own country's currency
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });

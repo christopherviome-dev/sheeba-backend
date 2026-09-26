@@ -6,7 +6,8 @@ const Activity = require('../models/Activity');
 const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
-const { normalizeGhanaCard, cleanLegalName, checkCardPhoto } = require('../lib/identity');
+const { normalizeGhanaCard, normalizeIdNumber, cleanLegalName, checkCardPhoto } = require('../lib/identity');
+const { COUNTRIES, countryOf } = require('../lib/countries');
 const V = require('../lib/validate');
 const Customer = require('../models/Customer');
 const { ensureCode } = require('../lib/codes');
@@ -24,6 +25,7 @@ function publicStylist(s, includeSensitive = false) {
   delete obj.passwordHash;
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
+    delete obj.idNumber;
     delete obj.verifyPhoto;
     delete obj.legalFullName;
     delete obj.verificationRejectedReason;
@@ -106,6 +108,8 @@ function discoverCard(s, weekVisits) {
       area: s.area,
       bio: s.bio ? String(s.bio).slice(0, 200) : null,
       verified: !!s.verified,
+      country: countryOf(s),
+      currency: s.currency || COUNTRIES[countryOf(s)].currency,
       workModes: s.workModes || [],
       availability: s.availability,
       location: s.location && s.location.lat != null ? { lat: s.location.lat, lng: s.location.lng } : null,
@@ -117,7 +121,9 @@ function discoverCard(s, weekVisits) {
 }
 
 router.get('/discover', async (req, res) => {
-  const shops = await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' });
+  // Shops in one country at a time, so prices share a currency and "near" means near.
+  const country = COUNTRIES[String(req.query.country || '').toUpperCase()] ? String(req.query.country).toUpperCase() : 'GH';
+  const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country);
   let visits = {};
   try {
     const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
@@ -429,15 +435,28 @@ router.post('/me/verify', requireAuth, async (req, res) => {
 
     const nameCheck = cleanLegalName(req.body.legalFullName);
     if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
-    const cardNum = normalizeGhanaCard(req.body.ghanaCardNum);
-    if (!cardNum) return res.status(400).json({ error: 'That doesn\u2019t look like a Ghana Card number. It should look like GHA-123456789-0.' });
+    // Which documents count depends on the professional's country.
+    const country = COUNTRIES[countryOf(st)];
+    const allowed = country.idDocuments.map(([k]) => k);
+    const idType = req.body.idType || (allowed.length === 1 ? allowed[0] : null);
+    if (!allowed.includes(idType)) return res.status(400).json({ error: `Choose an ID document accepted in ${country.name}.` });
+    let cardNum = null, idNumber = null;
+    if (idType === 'GHANA_CARD') {
+      cardNum = normalizeGhanaCard(req.body.ghanaCardNum !== undefined ? req.body.ghanaCardNum : req.body.idNumber);
+      if (!cardNum) return res.status(400).json({ error: 'That doesn\u2019t look like a Ghana Card number. It should look like GHA-123456789-0.' });
+    } else {
+      idNumber = normalizeIdNumber(req.body.idNumber);
+      if (!idNumber) return res.status(400).json({ error: 'Enter the document number exactly as printed (5 to 20 letters and numbers).' });
+    }
 
     const photo = req.body.verifyPhoto || st.verifyPhoto;
     const photoProblem = checkCardPhoto(photo);
     if (photoProblem) return res.status(400).json({ error: photoProblem });
 
     st.legalFullName = nameCheck.name;
+    st.idType = idType;
     st.ghanaCardNum = cardNum;
+    st.idNumber = idNumber;
     st.verifyPhoto = photo;
     st.pendingReview = true;
     st.verificationSubmittedAt = Date.now();
@@ -463,8 +482,8 @@ router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
     // Tight by design: approval is impossible without all three pieces the
     // admin is supposed to compare. Older submissions made before the legal
     // name existed must be rejected and resubmitted, not waved through.
-    if (!st.legalFullName || !st.ghanaCardNum || !st.verifyPhoto) {
-      return res.status(400).json({ error: 'This submission is missing the legal name, card number or card photo. Reject it and ask them to resubmit.' });
+    if (!st.legalFullName || !(st.ghanaCardNum || st.idNumber) || !st.verifyPhoto) {
+      return res.status(400).json({ error: 'This submission is missing the legal name, document number or document photo. Reject it and ask them to resubmit.' });
     }
     st.verified = true;
     st.pendingReview = false;

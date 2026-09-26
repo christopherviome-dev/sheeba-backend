@@ -7,6 +7,8 @@ const CustomerSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true },
   passwordHash: { type: String, required: true },
   name: { type: String, required: true },
+  // Which country this account is in (lib/countries.js). Older accounts: Ghana.
+  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
   // Sheeba code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
