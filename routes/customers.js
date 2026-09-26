@@ -12,7 +12,7 @@ const Stylist = require('../models/Stylist');
 const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
 const { notify } = require('./notifications');
-const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/passwords');
+const { phoneCandidates, checkNewPassword, toE164 } = require('../lib/passwords');
 const { uniqueCode, ensureCode } = require('../lib/codes');
 const { recordInvite } = require('../lib/invites');
 const { checkCountry } = require('../lib/countries');
@@ -42,7 +42,9 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const countryCheck = checkCountry(req.body.country);
     if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
-    const customer = await Customer.create({ phone: canonicalPhone(phone), passwordHash, name, code: await uniqueCode(Stylist, Customer), country: countryCheck.value });
+    const phoneCheck = toE164(phone, countryCheck.value);
+    if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, code: await uniqueCode(Stylist, Customer), country: countryCheck.value });
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });

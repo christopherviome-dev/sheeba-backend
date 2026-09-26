@@ -51,6 +51,11 @@ const StylistSchema = new mongoose.Schema({
   code: { type: String, unique: true, sparse: true },
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
   invitedById: { type: String, default: null },
+  // Apprentices (professionals in training) sign up with their supervisor's
+  // code; the supervisor confirms, which adds them to the shop's staff access.
+  role: { type: String, enum: ['PROFESSIONAL', 'APPRENTICE'], default: 'PROFESSIONAL' },
+  supervisorId: { type: String, default: null },
+  supervisorStatus: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', null], default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,
@@ -89,11 +94,11 @@ const StylistSchema = new mongoose.Schema({
   // matching every price already entered on the platform.
   currency: { type: String, default: 'GHS' },
   // Which country this account is in (lib/countries.js). Older accounts: Ghana.
-  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
+  country: { type: String, default: 'GH' }, // ISO code, checked against lib/worldCountries.js
   // Identity document type for verification (Ghana Card in Ghana; passport,
   // driving licence etc. elsewhere). Ghana Card numbers stay in ghanaCardNum;
   // other documents' numbers go in idNumber.
-  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', null], default: null },
+  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', 'NATIONAL_ID', null], default: null },
   idNumber: { type: String, default: null },
   // Real coordinates, set only when the professional explicitly opts in via
   // their own device's GPS — never required, never inferred from IP or

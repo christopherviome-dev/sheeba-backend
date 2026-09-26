@@ -2,6 +2,7 @@ const express = require('express');
 const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const { normalizeCode } = require('../lib/codes');
+const { countryOf } = require('../lib/countries');
 
 const router = express.Router();
 
@@ -14,9 +15,12 @@ router.get('/:code', async (req, res) => {
   if (!code) return res.status(404).json({ error: 'That isn\u2019t a Sheeba code.' });
   const st = await Stylist.findOne({ code });
   if (st && st.status === 'APPROVED' && (st.accountStatus || 'ACTIVE') === 'ACTIVE') {
-    return res.json({ type: 'professional', code, id: st._id, name: st.salonName || st.name });
+    return res.json({ type: 'professional', code, id: st._id, name: st.salonName || st.name, country: countryOf(st) });
   }
-  if (st || await Customer.exists({ code })) return res.json({ type: 'member', code });
+  // Country only (so the signup form can start on the right country code), never a name.
+  if (st) return res.json({ type: 'member', code, country: countryOf(st) });
+  const cu = await Customer.findOne({ code }, 'country');
+  if (cu) return res.json({ type: 'member', code, country: countryOf(cu) });
   res.status(404).json({ error: 'No one on Sheeba has this code.' });
 });
 

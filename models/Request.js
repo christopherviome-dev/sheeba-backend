@@ -10,7 +10,8 @@ const RequestSchema = new mongoose.Schema({
   priceSnapshot: { type: Number, default: null },
   durationSnapshot: { type: String, default: null },
   currencySnapshot: { type: String, default: 'GHS' }, // captured at creation — never recalculated later
-  checkedInAt: { type: Number, default: null }, // set when the professional checks the customer in (QR)
+  checkedInAt: { type: Number, default: null }, // set when the customer is checked in (QR)
+  checkedInBy: { type: String, enum: ['professional', 'customer', null], default: null },
   clientId: String,
   clientName: String,
   clientPhone: String,

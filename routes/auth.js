@@ -7,10 +7,11 @@ const Customer = require('../models/Customer');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { notifyAllAdmins } = require('./notifications');
 const { requireAuth } = require('../middleware/auth');
-const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/passwords');
+const { phoneCandidates, checkNewPassword, toE164 } = require('../lib/passwords');
 const { uniqueCode } = require('../lib/codes');
-const { COUNTRIES, checkCountry } = require('../lib/countries');
+const { getCountry, checkCountry } = require('../lib/countries');
 const { recordInvite } = require('../lib/invites');
+const { normalizeCode } = require('../lib/codes');
 const { notify } = require('./notifications');
 
 const router = express.Router();
@@ -31,6 +32,16 @@ router.post('/register', async (req, res) => {
   const countryCheck = checkCountry(req.body.country);
   if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
   const country = countryCheck.value;
+  const phoneCheck = toE164(req.body.phone, country);
+  if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+  // An apprentice names their supervisor by the supervisor's Sheeba code.
+  let supervisor = null;
+  const isApprentice = req.body.role === 'APPRENTICE';
+  if (isApprentice) {
+    const sc = normalizeCode(req.body.supervisorCode);
+    supervisor = sc ? await Stylist.findOne({ code: sc }) : null;
+    if (!supervisor || supervisor.role === 'APPRENTICE') return res.status(400).json({ error: 'Enter your supervisor\u2019s Sheeba code (they can find it under My Shop, Share & earn).' });
+  }
   try {
     const { phone, password, name } = req.body;
     if (!phone || !password || !name) return res.status(400).json({ error: 'Phone, password, and name are required.' });
@@ -38,14 +49,16 @@ router.post('/register', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const passwordHash = await bcrypt.hash(password, 10);
     const stylist = await Stylist.create({
-      phone: canonicalPhone(phone), passwordHash, name,
+      phone: phoneCheck.value, passwordHash, name,
       code: await uniqueCode(Stylist, Customer),
-      country, currency: COUNTRIES[country].currency, // a shop prices in its own country's currency
+      country, currency: getCountry(country).currency, // a shop prices in its own country's currency
+      ...(isApprentice ? { role: 'APPRENTICE', supervisorId: supervisor._id.toString(), supervisorStatus: 'PENDING' } : {}),
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'stylist', newDoc: stylist, Stylist, Customer, notify });
+    if (isApprentice) await notify({ recipientId: supervisor._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_REQUEST', title: `${stylist.name} wants to join your shop as an apprentice`, message: 'Confirm or decline in My Shop \u2192 Account.', entityType: 'shop', entityId: supervisor._id.toString(), priority: 'action_required' });
     await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {

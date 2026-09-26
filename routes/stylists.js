@@ -7,7 +7,7 @@ const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
 const { normalizeGhanaCard, normalizeIdNumber, cleanLegalName, checkCardPhoto } = require('../lib/identity');
-const { COUNTRIES, countryOf } = require('../lib/countries');
+const { getCountry, countryOf } = require('../lib/countries');
 const V = require('../lib/validate');
 const Customer = require('../models/Customer');
 const { ensureCode } = require('../lib/codes');
@@ -77,10 +77,11 @@ router.get('/', async (req, res) => {
 // own page, when someone actually opens it.
 const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
 const { accountFromRequest } = require('../lib/invites');
+const { phoneCandidates } = require('../lib/passwords');
 
 router.get('/discover', async (req, res) => {
   // Shops in one country at a time, so prices share a currency and "near" means near.
-  const country = COUNTRIES[String(req.query.country || '').toUpperCase()] ? String(req.query.country).toUpperCase() : 'GH';
+  const country = getCountry(String(req.query.country || '').toUpperCase()) ? String(req.query.country).toUpperCase() : 'GH';
   const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country);
   let visits = {};
   try {
@@ -394,7 +395,7 @@ router.post('/me/verify', requireAuth, async (req, res) => {
     const nameCheck = cleanLegalName(req.body.legalFullName);
     if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
     // Which documents count depends on the professional's country.
-    const country = COUNTRIES[countryOf(st)];
+    const country = getCountry(countryOf(st));
     const allowed = country.idDocuments.map(([k]) => k);
     const idType = req.body.idType || (allowed.length === 1 ? allowed[0] : null);
     if (!allowed.includes(idType)) return res.status(400).json({ error: `Choose an ID document accepted in ${country.name}.` });
@@ -617,15 +618,44 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
 router.post('/me/staff', requireAuth, async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Enter the phone number of their own Sheeba account.' });
-  const staffAccount = await Stylist.findOne({ phone });
+  const staffAccount = await Stylist.findOne({ phone: { $in: phoneCandidates(phone) } }); // any format: numbers are stored internationally
   if (!staffAccount) return res.status(404).json({ error: 'No Sheeba account found with that phone number — they need to register their own account first.' });
   if (staffAccount._id.toString() === req.stylistId) return res.status(400).json({ error: 'You can\'t add yourself as staff.' });
   const owner = await Stylist.findById(req.stylistId);
   if (owner.staffAccess.some(s => s.stylistId === staffAccount._id.toString())) return res.status(400).json({ error: 'They already have access.' });
   owner.staffAccess.push({ stylistId: staffAccount._id.toString() });
   await owner.save();
-  await notify({ recipientId: staffAccount._id.toString(), recipientType: 'stylist', type: 'SHOP_APPROVED', title: `${owner.salonName || owner.name} gave you shop access`, message: 'You can now help manage their requests.', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
+  await notify({ recipientId: staffAccount._id.toString(), recipientType: 'stylist', type: 'STAFF_ACCESS_GRANTED', title: `${owner.salonName || owner.name} gave you shop access`, message: 'You can now help manage their requests.', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
   res.json({ ok: true, staffName: staffAccount.name });
+});
+
+// Apprentices who named this professional as their supervisor.
+router.get('/me/apprentices', requireAuth, async (req, res) => {
+  const list = await Stylist.find({ supervisorId: String(req.stylistId), role: 'APPRENTICE' }, 'name supervisorStatus createdAt');
+  res.json(list.map((a) => ({ _id: a._id, name: a.name, status: a.supervisorStatus, since: a.createdAt })));
+});
+
+// Confirm an apprentice: they join this shop's staff access (existing system).
+router.post('/me/apprentices/:id/:decision', requireAuth, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'decline'].includes(decision)) return res.status(404).json({ error: 'Not found.' });
+  let a = null;
+  try { a = await Stylist.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!a || a.role !== 'APPRENTICE' || a.supervisorId !== String(req.stylistId)) return res.status(404).json({ error: 'No such apprentice request.' });
+  if (a.supervisorStatus !== 'PENDING') return res.status(400).json({ error: 'You already answered this request.' });
+  const owner = await Stylist.findById(req.stylistId);
+  if (decision === 'approve') {
+    if (!owner.staffAccess.some((x) => x.stylistId === a._id.toString())) owner.staffAccess.push({ stylistId: a._id.toString() });
+    await owner.save();
+    a.supervisorStatus = 'APPROVED';
+  } else {
+    a.supervisorStatus = 'DECLINED';
+  }
+  await a.save();
+  await notify({ recipientId: a._id.toString(), recipientType: 'stylist', type: decision === 'approve' ? 'APPRENTICE_APPROVED' : 'APPRENTICE_DECLINED',
+    title: decision === 'approve' ? `${owner.salonName || owner.name} confirmed you as their apprentice` : `${owner.salonName || owner.name} declined your apprentice request`,
+    message: decision === 'approve' ? 'You can now help with their shop\u2019s requests.' : '', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
+  res.json({ ok: true, status: a.supervisorStatus });
 });
 
 router.get('/me/staff', requireAuth, async (req, res) => {

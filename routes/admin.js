@@ -3,7 +3,7 @@ const AdminAction = require('../models/AdminAction');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeGhanaCard, normalizeIdNumber, compareNames } = require('../lib/identity');
-const { COUNTRIES, countryOf } = require('../lib/countries');
+const { getCountry, countryOf } = require('../lib/countries');
 // One key per real document, whatever its type, for duplicate detection.
 const docKey = (s) => {
   if (s.ghanaCardNum) return 'GHANA_CARD:' + (normalizeGhanaCard(s.ghanaCardNum) || String(s.ghanaCardNum).toUpperCase().trim());
@@ -57,9 +57,9 @@ router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
         salonName: s.salonName,
         phone: s.phone,
         legalFullName: s.legalFullName,
-        country: COUNTRIES[countryOf(s)].name,
+        country: getCountry(countryOf(s)).name,
         idType: s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null),
-        idLabel: ((COUNTRIES[countryOf(s)].idDocuments.find(([k]) => k === (s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null))) || [null, 'ID document'])[1]),
+        idLabel: ((getCountry(countryOf(s)).idDocuments.find(([k]) => k === (s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null))) || [null, 'ID document'])[1]),
         ghanaCardNum: s.ghanaCardNum || s.idNumber, // the document number, whatever its type (name kept for the app)
         cardFormatValid: s.ghanaCardNum ? !!normalizeGhanaCard(s.ghanaCardNum) : !!normalizeIdNumber(s.idNumber),
         verifyPhoto: s.verifyPhoto,
