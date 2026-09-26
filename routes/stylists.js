@@ -8,6 +8,8 @@ const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
 const { normalizeGhanaCard, cleanLegalName, checkCardPhoto } = require('../lib/identity');
 const V = require('../lib/validate');
+const Customer = require('../models/Customer');
+const { ensureCode } = require('../lib/codes');
 const AVAILABILITY = ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'];
 
 const router = express.Router();
@@ -26,6 +28,8 @@ function publicStylist(s, includeSensitive = false) {
     delete obj.legalFullName;
     delete obj.verificationRejectedReason;
     delete obj.mustChangePassword;
+    delete obj.invitedByType;
+    delete obj.invitedById;
     delete obj.passwordChangedAt;
   }
   return obj;
@@ -134,6 +138,7 @@ router.get('/discover', async (req, res) => {
 router.get('/me', requireAuth, async (req, res) => {
   const st = await Stylist.findById(req.stylistId);
   if (!st) return res.status(404).json({ error: 'Not found.' });
+  try { await ensureCode(st, Stylist, Customer); } catch (e) { /* a code can be made next time */ }
   res.json(publicStylist(st, true));
 });
 

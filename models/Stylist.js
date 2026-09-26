@@ -47,6 +47,10 @@ const StylistSchema = new mongoose.Schema({
   // How this professional works. Empty = not said yet. No one is forced to
   // have a physical shop: home visits, mobile and appointment-only are equal.
   workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
+  // Sheeba code (lib/codes.js) and who invited this account, if anyone.
+  code: { type: String, unique: true, sparse: true },
+  invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
+  invitedById: { type: String, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,

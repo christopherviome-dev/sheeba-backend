@@ -7,6 +7,7 @@ const { postSystemMessage, identifyActor } = require('./messages');
 const { notify } = require('./notifications');
 const Conversation = require('../models/Conversation');
 const Customer = require('../models/Customer');
+const { markInviteEarned } = require('../lib/invites');
 const StyleRecord = require('../models/StyleRecord');
 const Referral = require('../models/Referral');
 const Stylist = require('../models/Stylist');
@@ -195,6 +196,9 @@ router.put('/:id/status', requireAuth, async (req, res) => {
     await recalculateGroupPoints(r.stylistId);
     await postSystemMessage(r._id.toString(), 'service_completed', { requestId: r._id.toString(), styleId: r.styleId, date: r.date });
     await notifyRealCustomer(r.clientId, { type: 'SERVICE_COMPLETED', title: 'Your service is complete', entityType: 'request', entityId: r._id.toString(), priority: 'normal' });
+    // Invite rewards: if the customer or the professional on this job joined
+    // through someone's code, this may be their first completed job.
+    try { await markInviteEarned(r, { Stylist, Customer, notify }); } catch (e) { /* non-fatal: rewards never block a completion */ }
     // The real Style Record foundation, finally built — created only for a
     // genuine logged-in customer (same honest rule as everywhere else
     // tonight: an anonymous booker's record would be unreadable by anyone).

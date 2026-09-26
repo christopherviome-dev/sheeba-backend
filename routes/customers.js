@@ -13,6 +13,8 @@ const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
 const { notify } = require('./notifications');
 const { phoneCandidates, checkNewPassword } = require('../lib/passwords');
+const { uniqueCode, ensureCode } = require('../lib/codes');
+const { recordInvite } = require('../lib/invites');
 
 const router = express.Router();
 
@@ -35,7 +37,8 @@ router.post('/register', async (req, res) => {
     const existing = await Customer.findOne({ phone: { $in: phoneCandidates(phone) } });
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const passwordHash = await bcrypt.hash(password, 10);
-    const customer = await Customer.create({ phone: String(phone).trim(), passwordHash, name });
+    const customer = await Customer.create({ phone: String(phone).trim(), passwordHash, name, code: await uniqueCode(Stylist, Customer) });
+    await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
@@ -76,6 +79,7 @@ router.post('/me/change-password', requireCustomerAuth, async (req, res) => {
 router.get('/me', requireCustomerAuth, async (req, res) => {
   const c = await Customer.findById(req.customerId);
   if (!c) return res.status(404).json({ error: 'Not found.' });
+  try { await ensureCode(c, Stylist, Customer); } catch (e) { /* a code can be made next time */ }
   res.json(publicCustomer(c));
 });
 

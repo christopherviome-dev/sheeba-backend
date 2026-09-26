@@ -9,11 +9,11 @@ const AdminActionSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
-      'SHOP_APPROVED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED', 'PASSWORD_RESET_ISSUED', 'PASSWORD_RESET_DISMISSED', 'REPORT_RESOLVED', 'REPORT_STATE_CHANGED',
+      'SHOP_APPROVED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED', 'PASSWORD_RESET_ISSUED', 'PASSWORD_RESET_DISMISSED', 'INVITE_REWARDS_PAID', 'INVITE_REWARD_VOIDED', 'REPORT_RESOLVED', 'REPORT_STATE_CHANGED',
       'ACCOUNT_RESTRICTED', 'ACCOUNT_RESTORED',
     ],
   },
-  targetType: { type: String, enum: ['stylist', 'report', 'customer', 'password-reset'], required: true },
+  targetType: { type: String, enum: ['stylist', 'report', 'customer', 'password-reset', 'invite-reward'], required: true },
   targetId: { type: String, required: true },
   reason: { type: String, default: null },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },

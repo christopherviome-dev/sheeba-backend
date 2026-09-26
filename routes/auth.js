@@ -8,6 +8,9 @@ const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { notifyAllAdmins } = require('./notifications');
 const { requireAuth } = require('../middleware/auth');
 const { phoneCandidates, checkNewPassword } = require('../lib/passwords');
+const { uniqueCode } = require('../lib/codes');
+const { recordInvite } = require('../lib/invites');
+const { notify } = require('./notifications');
 
 const router = express.Router();
 const COLORS = ['#e63875', '#4b2069', '#f5a623', '#b81e58', '#33124a', '#c97d0a'];
@@ -32,10 +35,12 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const stylist = await Stylist.create({
       phone: String(phone).trim(), passwordHash, name,
+      code: await uniqueCode(Stylist, Customer),
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       status: 'UNDER_REVIEW', // explicit, though also the schema default — every new shop starts hidden from public Discovery until an admin approves it
     });
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
+    await recordInvite({ inviteCode: req.body.inviteCode, newType: 'stylist', newDoc: stylist, Stylist, Customer, notify });
     await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {
