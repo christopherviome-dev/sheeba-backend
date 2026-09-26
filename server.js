@@ -38,6 +38,7 @@ app.use('/api/customers', customerRoutes);
 // Mounted before the general /api routers so nothing else can catch these addresses.
 app.use('/api/u', require('./routes/codes'));
 app.use('/api/invites', require('./routes/invites'));
+app.use('/api/checkin', require('./routes/checkin'));
 app.use('/api', messageRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api/stylists', crmRoutes);
