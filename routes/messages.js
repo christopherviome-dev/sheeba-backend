@@ -5,6 +5,9 @@ const Message = require('../models/Message');
 const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const { requireAuth, requireCustomerAuth } = require('../middleware/auth');
+const V = require('../lib/validate');
+const attempts = require('../lib/attempts');
+const findConv = async (id) => { try { return await Conversation.findById(id); } catch (e) { return null; } }; // bad ids → clean 404
 
 const router = express.Router();
 
@@ -39,11 +42,18 @@ function isParticipant(actor, conv) {
 router.post('/conversations', requireCustomerAuth, async (req, res) => {
   const { stylistId, requestId } = req.body;
   if (!stylistId) return res.status(400).json({ error: 'Missing stylistId.' });
-  const stylist = await Stylist.findById(stylistId);
-  if (!stylist) return res.status(404).json({ error: 'Shop not found.' });
+  let stylist = null;
+  try { stylist = await Stylist.findById(stylistId); } catch (e) { /* bad id */ }
+  // Only live shops can be messaged.
+  if (!stylist || stylist.status !== 'APPROVED' || (stylist.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(404).json({ error: 'Shop not found.' });
+  const customer = await Customer.findById(req.customerId);
+  if (!customer || (customer.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(403).json({ error: 'Your account can\u2019t send messages right now.' });
   let conv = await Conversation.findOne({ customerId: req.customerId, stylistId });
   if (!conv) {
-    const customer = await Customer.findById(req.customerId);
+    // At most 10 NEW conversations in 24 hours per customer (counted in the
+    // database, so it really is per day): stops spamming many shops.
+    const today = await Conversation.countDocuments({ customerId: req.customerId, createdAt: { $gte: new Date(Date.now() - 24 * 3600 * 1000) } }); // a Date: the field is stored as one
+    if (today >= 10) return res.status(429).json({ error: 'You\u2019ve started a lot of new conversations today. Please try again tomorrow.' });
     conv = await Conversation.create({ customerId: req.customerId, customerName: customer ? customer.name : null, stylistId, requestId: requestId || null, stylistUnread: true });
   } else if (requestId && conv.requestId !== requestId) {
     conv.requestId = requestId; // keep pointing at the most recent real request
@@ -54,7 +64,11 @@ router.post('/conversations', requireCustomerAuth, async (req, res) => {
 
 router.get('/conversations/customer', requireCustomerAuth, async (req, res) => {
   const list = await Conversation.find({ customerId: req.customerId }).sort({ lastMessageAt: -1 });
-  res.json(list);
+  // Each shop's NAME only (one lean lookup), so the list reads well.
+  const ids = [...new Set(list.map((c) => c.stylistId).filter(Boolean))];
+  const shops = ids.length ? await Stylist.find({ _id: { $in: ids } }, 'name salonName') : [];
+  const byId = Object.fromEntries(shops.map((s) => [s._id.toString(), s.salonName || s.name]));
+  res.json(list.map((c) => ({ ...(c.toObject ? c.toObject() : c), stylistName: byId[String(c.stylistId)] || 'A Sheeba shop' })));
 });
 
 router.get('/conversations/stylist', requireAuth, async (req, res) => {
@@ -64,7 +78,7 @@ router.get('/conversations/stylist', requireAuth, async (req, res) => {
 
 router.get('/conversations/:id', async (req, res) => {
   const actor = identifyActor(req);
-  const conv = await Conversation.findById(req.params.id);
+  const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   if (!isParticipant(actor, conv)) return res.status(403).json({ error: 'Not authorized.' });
   res.json(conv);
@@ -72,7 +86,7 @@ router.get('/conversations/:id', async (req, res) => {
 
 router.get('/conversations/:id/messages', async (req, res) => {
   const actor = identifyActor(req);
-  const conv = await Conversation.findById(req.params.id);
+  const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   if (!isParticipant(actor, conv)) return res.status(403).json({ error: 'Not authorized.' });
   const messages = await Message.find({ conversationId: conv._id.toString() }).sort({ createdAt: 1 });
@@ -84,7 +98,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
 // routes/requests.js, when the real underlying record actually changes.
 router.post('/conversations/:id/messages', async (req, res) => {
   const actor = identifyActor(req);
-  const conv = await Conversation.findById(req.params.id);
+  const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   // Deliberately stricter than isParticipant() above: admin can VIEW a
   // conversation for moderation, but must never be able to SEND as if they
@@ -93,8 +107,23 @@ router.post('/conversations/:id/messages', async (req, res) => {
   const isRealParticipant = (actor && actor.type === 'customer' && conv.customerId === actor.id)
     || (actor && actor.type === 'stylist' && conv.stylistId === actor.id);
   if (!isRealParticipant) return res.status(403).json({ error: 'Not authorized.' });
-  const { text, photo } = req.body;
+  // Restricted or suspended accounts can't send messages.
+  const Me = actor.type === 'customer' ? Customer : Stylist;
+  const me = await Me.findById(actor.id, 'accountStatus');
+  if (!me || (me.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(403).json({ error: 'Your account can\u2019t send messages right now.' });
+  // At most 30 messages per 15 minutes from one sender (then a 15-minute pause): stops flooding.
+  const k = `msg:${actor.type}:${actor.id}`;
+  if (attempts.status([k]).blocked) return res.status(429).json({ error: 'You\u2019re sending messages very quickly. Please wait a few minutes.' });
+  const text = typeof req.body.text === 'string' ? req.body.text.trim() : '';
+  if (text.length > 2000) return res.status(400).json({ error: 'Please keep messages under 2,000 characters.' });
+  let photo = null;
+  if (req.body.photo !== undefined && req.body.photo !== null && req.body.photo !== '') {
+    const p = V.photo(req.body.photo, 'service'); // a real uploaded image, within the size limit
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    photo = p.value;
+  }
   if (!text && !photo) return res.status(400).json({ error: 'Message needs text or a photo.' });
+  attempts.fail([[k, 30]]);
   const msg = await Message.create({
     conversationId: conv._id.toString(),
     senderType: actor.type,
@@ -124,7 +153,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
 router.put('/conversations/:id/read', async (req, res) => {
   const actor = identifyActor(req);
-  const conv = await Conversation.findById(req.params.id);
+  const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   const isCustomerSide = actor && actor.type === 'customer' && conv.customerId === actor.id;
   const isStylistSide = actor && actor.type === 'stylist' && conv.stylistId === actor.id;

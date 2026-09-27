@@ -12,6 +12,7 @@ const RequestSchema = new mongoose.Schema({
   currencySnapshot: { type: String, default: 'GHS' }, // captured at creation — never recalculated later
   checkedInAt: { type: Number, default: null }, // set when the customer is checked in (QR)
   checkedInBy: { type: String, enum: ['professional', 'customer', null], default: null },
+  completedAt: { type: Number, default: null }, // when it was marked completed (earnings use this, not 'last updated')
   clientId: String,
   clientName: String,
   clientPhone: String,

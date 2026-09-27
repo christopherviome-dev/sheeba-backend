@@ -125,8 +125,9 @@ router.get('/me/customers/:customerId', requireAuth, async (req, res) => {
 
 // Add a private note — only the authoring stylist can ever write or read it.
 router.post('/me/customers/:customerId/notes', requireAuth, async (req, res) => {
-  const { note } = req.body;
+  const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
   if (!note) return res.status(400).json({ error: 'Note text is required.' });
+  if (note.length > 1000) return res.status(400).json({ error: 'Please keep notes under 1,000 characters.' });
   const hasRelationship = await Request.exists({ stylistId: req.stylistId, clientId: req.params.customerId });
   if (!hasRelationship) return res.status(403).json({ error: 'No relationship with this customer.' });
   const n = await CustomerNote.create({ stylistId: req.stylistId, customerId: req.params.customerId, note });
@@ -135,6 +136,15 @@ router.post('/me/customers/:customerId/notes', requireAuth, async (req, res) => 
 
 // Real completed-services list — every field here already exists on the
 // real Request record, including the historical price/duration snapshot.
+// Delete one of your own private notes.
+router.delete('/me/customers/:customerId/notes/:noteId', requireAuth, async (req, res) => {
+  let n = null;
+  try { n = await CustomerNote.findOne({ _id: req.params.noteId, stylistId: req.stylistId, customerId: req.params.customerId }); } catch (e) { /* bad id */ }
+  if (!n) return res.status(404).json({ error: 'Note not found.' });
+  await CustomerNote.deleteOne({ _id: n._id });
+  res.json({ ok: true });
+});
+
 router.get('/me/completed', requireAuth, async (req, res) => {
   const list = await Request.find({ stylistId: req.stylistId, status: 'completed' }).sort({ updatedAt: -1 });
   res.json(list);
@@ -159,7 +169,11 @@ router.get('/me/service-value', requireAuth, async (req, res) => {
   let until = now;
   if (period === 'lastMonth') until = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1).getTime();
 
-  const completed = await Request.find({ stylistId: req.stylistId, status: 'completed', updatedAt: { $gte: since, $lt: until } });
+  // Dated by WHEN THE SERVICE WAS COMPLETED (completedAt), so a later change
+  // such as a rating can't move a job into another month. Older bookings
+  // without completedAt fall back to their last update.
+  const doneAt = (r) => r.completedAt || r.updatedAt;
+  const completed = (await Request.find({ stylistId: req.stylistId, status: 'completed' })).filter((r) => doneAt(r) >= since && doneAt(r) < until);
   const byCurrency = {};
   const byService = {};
   for (const r of completed) {
@@ -176,10 +190,10 @@ router.get('/me/service-value', requireAuth, async (req, res) => {
     if (typeof r.priceSnapshot === 'number') byService[name].total += r.priceSnapshot;
   }
   const groups = await realCustomerGroups(req.stylistId);
-  const repeatInWindow = groups.filter(g => g.requests.filter(r => r.status === 'completed' && r.updatedAt >= since && r.updatedAt < until).length >= 2).length;
+  const repeatInWindow = groups.filter(g => g.requests.filter(r => r.status === 'completed' && doneAt(r) >= since && doneAt(r) < until).length >= 2).length;
   const newInWindow = groups.filter(g => {
-    const c = g.requests.filter(r => r.status === 'completed').sort((a, b) => a.updatedAt - b.updatedAt);
-    return c.length > 0 && c[0].updatedAt >= since && c[0].updatedAt < until;
+    const c = g.requests.filter(r => r.status === 'completed').sort((a, b) => doneAt(a) - doneAt(b));
+    return c.length > 0 && doneAt(c[0]) >= since && doneAt(c[0]) < until;
   }).length;
 
   res.json({

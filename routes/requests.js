@@ -182,7 +182,7 @@ router.put('/:id/status', requireAuth, async (req, res) => {
   // Atomic: only succeeds if nobody changed this request since we read it.
   const r = await Request.findOneAndUpdate(
     { _id: current._id, status: current.status },
-    { status: next, updatedAt: Date.now() },
+    { status: next, updatedAt: Date.now(), ...(next === 'completed' ? { completedAt: Date.now() } : {}) },
     { new: true }
   );
   if (!r) return res.status(409).json({ error: 'This request was just updated. Refresh to see its latest status.' });
