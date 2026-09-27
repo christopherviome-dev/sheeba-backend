@@ -61,7 +61,8 @@ const StylistSchema = new mongoose.Schema({
   // code; the supervisor confirms, which adds them to the shop's staff access.
   role: { type: String, enum: ['PROFESSIONAL', 'APPRENTICE'], default: 'PROFESSIONAL' },
   supervisorId: { type: String, default: null },
-  supervisorStatus: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', null], default: null },
+  supervisorStatus: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', 'GRADUATED', null], default: null },
+  graduatedAt: { type: Number, default: null }, // when they graduated from apprentice to independent professional
   // Age check (only when the admin has it switched on; see lib/age.js).
   ageConfirmedAt: { type: Number, default: null },
   isMinor: { type: Boolean, default: false }, // a 15-17 year old apprentice: never public, no direct bookings

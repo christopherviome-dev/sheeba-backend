@@ -45,6 +45,7 @@ app.use('/api/checkin', require('./routes/checkin'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/catalog', require('./routes/catalog'));
 app.use('/api/prices', require('./routes/prices'));
+app.use('/api/training', require('./routes/training'));
 app.use('/api', messageRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api/stylists', crmRoutes);

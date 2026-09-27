@@ -687,8 +687,9 @@ router.post('/me/service-proposals', requireAuth, async (req, res) => {
 });
 
 router.get('/me/apprentices', requireAuth, async (req, res) => {
-  const list = await Stylist.find({ supervisorId: String(req.stylistId), role: 'APPRENTICE' }, 'name supervisorStatus createdAt');
-  res.json(list.map((a) => ({ _id: a._id, name: a.name, status: a.supervisorStatus, since: a.createdAt })));
+  // Current apprentices and those who have graduated (their training history stays visible).
+  const list = await Stylist.find({ supervisorId: String(req.stylistId) }, 'name supervisorStatus createdAt isMinor');
+  res.json(list.map((a) => ({ _id: a._id, name: a.name, status: a.supervisorStatus, since: a.createdAt, isMinor: !!a.isMinor })));
 });
 
 // Confirm an apprentice: they join this shop's staff access (existing system).
