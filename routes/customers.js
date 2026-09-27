@@ -86,6 +86,9 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'That phone number and password don\u2019t match. Check both, or use "Forgot password".' });
     }
     attempts.loginSucceeded(keys);
+    if (['SUSPENDED', 'BANNED'].includes(customer.accountStatus)) {
+      return res.status(403).json({ error: `This account is ${customer.accountStatus.toLowerCase()}${customer.restrictionReason ? ': ' + customer.restrictionReason : '.'}` });
+    }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
     res.status(500).json({ error: 'Login failed.' });
@@ -217,6 +220,8 @@ router.get('/me/history', requireCustomerAuth, async (req, res) => {
 // style's CURRENT configuration, never the historical snapshot, since a
 // new booking must reflect what the shop actually charges today.
 router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) => {
+  const c = await Customer.findById(req.customerId, 'accountStatus restrictionReason');
+  if (c && c.accountStatus && c.accountStatus !== 'ACTIVE') return res.status(403).json({ error: `Your account is restricted${c.restrictionReason ? ': ' + c.restrictionReason : '.'} If you think this is a mistake, contact Sheeba.` });
   const old = await Request.findById(req.params.requestId);
   if (!old || old.clientId !== req.customerId) return res.status(403).json({ error: 'Not your service record.' });
   if (!old.stylistId) return res.status(400).json({ error: 'That was an open request with no specific shop.' });

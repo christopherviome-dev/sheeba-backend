@@ -108,6 +108,8 @@ router.post('/', async (req, res) => {
         if (!actor || actor.type !== 'customer' || actor.id !== clientId) {
           return res.status(401).json({ error: 'Please log in to send a request from your account.' });
         }
+        const c = await Customer.findById(clientId, 'accountStatus restrictionReason');
+        if (c && c.accountStatus && c.accountStatus !== 'ACTIVE') return res.status(403).json({ error: `Your account is restricted${c.restrictionReason ? ': ' + c.restrictionReason : '.'} If you think this is a mistake, contact Sheeba.` });
       }
     }
 

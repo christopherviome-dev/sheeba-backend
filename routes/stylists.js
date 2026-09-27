@@ -516,18 +516,25 @@ router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) =
 router.post('/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
   const { accountStatus, reason } = req.body;
   if (!['RESTRICTED', 'SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(accountStatus)) return res.status(400).json({ error: 'Invalid account status.' });
-  if (!reason) return res.status(400).json({ error: 'A reason is required for any account restriction.' });
-  const st = await Stylist.findByIdAndUpdate(req.params.id, {
-    accountStatus, restrictionReason: reason, restrictedAt: Date.now(), restrictedBy: req.stylistId, restoredAt: null,
-  }, { new: true });
+  const why = typeof reason === 'string' ? reason.trim().slice(0, 300) : '';
+  if (why.length < 5) return res.status(400).json({ error: 'A clear reason is required for any account restriction.' });
+  let st = null;
+  try {
+    st = await Stylist.findByIdAndUpdate(req.params.id, {
+      accountStatus, restrictionReason: why, restrictedAt: Date.now(), restrictedBy: req.stylistId, restoredAt: null,
+    }, { new: true });
+  } catch (e) { /* bad id */ }
   if (!st) return res.status(404).json({ error: 'Not found.' });
-  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTRICTED', targetType: 'stylist', targetId: st._id.toString(), reason, meta: { accountStatus } }); } catch (e) { /* non-fatal */ }
+  await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: 'ACCOUNT_RESTRICTED', title: `Your shop has been ${accountStatus.toLowerCase()}`, message: why, entityType: 'shop', entityId: st._id.toString(), priority: 'important' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTRICTED', targetType: 'stylist', targetId: st._id.toString(), reason: why, meta: { accountStatus } }); } catch (e) { /* non-fatal */ }
   res.json(publicStylist(st, true));
 });
 
 router.post('/:id/restore', requireAuth, requireAdmin, async (req, res) => {
-  const st = await Stylist.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now() }, { new: true });
+  let st = null;
+  try { st = await Stylist.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now(), restrictionReason: null }, { new: true }); } catch (e) { /* bad id */ }
   if (!st) return res.status(404).json({ error: 'Not found.' });
+  await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: 'ACCOUNT_RESTORED', title: 'Your shop is active again', message: '', entityType: 'shop', entityId: st._id.toString(), priority: 'important' });
   try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTORED', targetType: 'stylist', targetId: st._id.toString() }); } catch (e) { /* non-fatal */ }
   res.json(publicStylist(st, true));
 });

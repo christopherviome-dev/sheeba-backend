@@ -196,6 +196,30 @@ router.post('/invite-rewards/:id/void', requireAuth, requireAdmin, async (req, r
   res.json({ ok: true });
 });
 
+// ---------- Customer restrictions ----------
+// RESTRICTED: can log in but can't book. SUSPENDED / BANNED: can't log in.
+router.post('/customers/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
+  const { accountStatus } = req.body;
+  if (!['RESTRICTED', 'SUSPENDED', 'BANNED'].includes(accountStatus)) return res.status(400).json({ error: 'Invalid account status.' });
+  const why = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 300) : '';
+  if (why.length < 5) return res.status(400).json({ error: 'A clear reason is required for any account restriction.' });
+  let c = null;
+  try { c = await Customer.findByIdAndUpdate(req.params.id, { accountStatus, restrictionReason: why, restrictedAt: Date.now(), restrictedBy: req.stylistId, restoredAt: null }, { new: true }); } catch (e) { /* bad id */ }
+  if (!c) return res.status(404).json({ error: 'Not found.' });
+  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTRICTED', title: `Your Sheeba account has been ${accountStatus.toLowerCase()}`, message: why, entityType: null, entityId: null, priority: 'important' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTRICTED', targetType: 'customer', targetId: c._id.toString(), reason: why, meta: { accountStatus } }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, accountStatus: c.accountStatus });
+});
+
+router.post('/customers/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+  let c = null;
+  try { c = await Customer.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now(), restrictionReason: null }, { new: true }); } catch (e) { /* bad id */ }
+  if (!c) return res.status(404).json({ error: 'Not found.' });
+  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTORED', title: 'Your Sheeba account is active again', message: '', entityType: null, entityId: null, priority: 'important' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTORED', targetType: 'customer', targetId: c._id.toString() }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, accountStatus: 'ACTIVE' });
+});
+
 // ---------- Proposed services ----------
 router.get('/service-proposals', requireAuth, requireAdmin, async (req, res) => {
   const pending = await ServiceType.find({ status: 'PENDING' });

@@ -25,6 +25,13 @@ const CustomerSchema = new mongoose.Schema({
   feedFor: { type: String, enum: ['MEN', 'WOMEN', 'BOTH', null], default: null },
   favourites: { type: [String], default: [] },
   onboardedAt: { type: Number, default: null },
+  // Admin restrictions: RESTRICTED = can log in but can't book;
+  // SUSPENDED / BANNED = can't log in. The reason is shown to them.
+  accountStatus: { type: String, enum: ['ACTIVE', 'RESTRICTED', 'SUSPENDED', 'BANNED'], default: 'ACTIVE' },
+  restrictionReason: { type: String, default: null },
+  restrictedAt: { type: Number, default: null },
+  restrictedBy: { type: String, default: null },
+  restoredAt: { type: Number, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
 }, { timestamps: true });

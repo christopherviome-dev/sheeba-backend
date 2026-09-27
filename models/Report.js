@@ -5,6 +5,14 @@ const ReportSchema = new mongoose.Schema({
   detail: String,
   contact: String,
   urgent: { type: Boolean, default: false },
+  // Who the report is about: a professional (stylistId, kept for the older
+  // site) or a customer (reported by a professional they had a booking with).
+  targetType: { type: String, enum: ['stylist', 'customer', null], default: 'stylist' },
+  targetId: { type: String, default: null },
+  requestId: { type: String, default: null }, // the booking it relates to, if any
+  category: { type: String, enum: ['NO_SHOW', 'UNSAFE', 'HARASSMENT', 'FRAUD', 'POOR_SERVICE', 'FAKE_PROFILE', 'OTHER', null], default: null },
+  reporterType: { type: String, enum: ['stylist', 'customer', null], default: null }, // when logged in
+  reporterId: { type: String, default: null },
   // `resolved` stays for backward compatibility with existing frontend
   // logic — `state` is the new, real workflow. Kept in sync: RESOLVED or
   // DISMISSED always sets resolved=true, everything else keeps it false.
