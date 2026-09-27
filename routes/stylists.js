@@ -7,8 +7,10 @@ const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
 const { notify, notifyAllAdmins } = require('./notifications');
 const { normalizeGhanaCard, normalizeIdNumber, cleanLegalName, checkCardPhoto } = require('../lib/identity');
-const { COUNTRIES, countryOf } = require('../lib/countries');
+const { getCountry, countryOf } = require('../lib/countries');
 const V = require('../lib/validate');
+const { getCatalog, servicesOf, slugify } = require('../lib/catalog');
+const ServiceType = require('../models/ServiceType');
 const Customer = require('../models/Customer');
 const { ensureCode } = require('../lib/codes');
 const AVAILABILITY = ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'];
@@ -21,7 +23,7 @@ const router = express.Router();
 // both legitimate, existing uses. Every public-facing or anonymous-action
 // response must pass false.
 function publicStylist(s, includeSensitive = false) {
-  const obj = s.toObject ? s.toObject() : s;
+  const obj = s.toObject ? s.toObject() : { ...s }; // always a copy: never alter the stored record
   delete obj.passwordHash;
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
@@ -32,6 +34,9 @@ function publicStylist(s, includeSensitive = false) {
     delete obj.mustChangePassword;
     delete obj.invitedByType;
     delete obj.invitedById;
+    delete obj.guardianName;
+    delete obj.guardianPhone;
+    delete obj.guardianConsentAt;
     delete obj.passwordChangedAt;
   }
   return obj;
@@ -77,10 +82,11 @@ router.get('/', async (req, res) => {
 // own page, when someone actually opens it.
 const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
 const { accountFromRequest } = require('../lib/invites');
+const { phoneCandidates } = require('../lib/passwords');
 
 router.get('/discover', async (req, res) => {
   // Shops in one country at a time, so prices share a currency and "near" means near.
-  const country = COUNTRIES[String(req.query.country || '').toUpperCase()] ? String(req.query.country).toUpperCase() : 'GH';
+  const country = getCountry(String(req.query.country || '').toUpperCase()) ? String(req.query.country).toUpperCase() : 'GH';
   const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country);
   let visits = {};
   try {
@@ -129,17 +135,7 @@ function expandQuery(q) {
 // shipping every shop to the client for JS filtering. Only ever searches
 // APPROVED shops (or everyone, for an admin request), matching the exact
 // same visibility rule enforced everywhere else in this file.
-// Real haversine great-circle distance in km — plain math, no external
-// service, no API key. Returns null if either point is missing, so callers
-// never fabricate a distance for a shop that hasn't opted into sharing one.
-function distanceKm(lat1, lng1, lat2, lng2) {
-  if ([lat1, lng1, lat2, lng2].some(v => typeof v !== 'number')) return null;
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
+const { distanceKm } = require('../lib/geo'); // shared: also used for local price ranges
 
 router.get('/search', async (req, res) => {
   const isAdminRequest = tryGetAdminFlag(req);
@@ -257,6 +253,7 @@ router.put('/me', requireAuth, async (req, res) => {
     name: () => V.text(b.name, { label: 'Your name', min: 2, max: 60 }),
     category: () => V.text(b.category, { label: 'Category', max: 40 }),
     area: () => V.text(b.area, { label: 'Area', max: 60 }),
+    city: () => V.text(b.city, { label: 'City', max: 40 }),
     bio: () => V.longText(b.bio, { label: 'Description', max: 600 }),
     profilePhoto: () => V.photo(b.profilePhoto, 'profile'),
     coverPhoto: () => V.photo(b.coverPhoto, 'profile'),
@@ -272,6 +269,14 @@ router.put('/me', requireAuth, async (req, res) => {
   if (b.availability !== undefined) {
     if (!AVAILABILITY.includes(b.availability)) return res.status(400).json({ error: 'Unknown availability.' });
     changes.availability = b.availability;
+  }
+  if (b.services !== undefined) {
+    const catalog = await getCatalog();
+    if (!Array.isArray(b.services)) return res.status(400).json({ error: 'Choose what you offer.' });
+    const chosen = [...new Set(b.services.map(String))];
+    if (chosen.length > 8) return res.status(400).json({ error: 'Choose up to 8 services.' });
+    if (chosen.some((k) => !catalog.some((c) => c.key === k))) return res.status(400).json({ error: 'Unknown service.' });
+    changes.services = chosen;
   }
   // Check the storage total BEFORE changing anything.
   let total = V.totalPhotoChars(st);
@@ -313,6 +318,8 @@ function checkService(b, { partial }) {
     desc: () => V.longText(b.desc, { label: 'Description', max: 300 }),
     photo: () => V.photo(b.photo, 'service'),
     photoThumb: () => V.photo(b.photoThumb, 'thumb'),
+    serviceKey: () => (b.serviceKey === null || b.serviceKey === '' ? { ok: true, value: null } : { ok: true, value: String(b.serviceKey) }),
+    styleKey: () => (b.styleKey === null || b.styleKey === '' ? { ok: true, value: null } : { ok: true, value: String(b.styleKey) }),
   };
   for (const [field, check] of Object.entries(checks)) {
     if (b[field] === undefined) {
@@ -323,6 +330,7 @@ function checkService(b, { partial }) {
     if (!r.ok) return { error: r.error };
     out[field] = r.value;
   }
+  // Service and style must be real (checked against the catalog by the routes).
   // A thumbnail always belongs to the current photo: removing or replacing
   // the photo without a new thumbnail clears the old one.
   if ('photo' in out && !('photoThumb' in out)) out.photoThumb = null;
@@ -336,6 +344,12 @@ router.post('/me/styles', requireAuth, async (req, res) => {
   if ((st.styles || []).length >= V.MAX_SERVICES) return res.status(400).json({ error: `You can list up to ${V.MAX_SERVICES} services. Remove one to add another.` });
   const c = checkService(req.body || {}, { partial: false });
   if (c.error) return res.status(400).json({ error: c.error });
+  if ('serviceKey' in c.value || 'styleKey' in c.value) {
+    const catalog = await getCatalog();
+    const svc = c.value.serviceKey ? catalog.find((x) => x.key === c.value.serviceKey) : null;
+    if (c.value.serviceKey && !svc) return res.status(400).json({ error: 'Unknown service.' });
+    if (c.value.styleKey && (!svc || !svc.styles.some((x) => x.key === c.value.styleKey))) return res.status(400).json({ error: 'That style doesn\u2019t belong to the chosen service.' });
+  }
   if (V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) return res.status(400).json({ error: V.STORAGE_FULL });
   st.styles.push({ id: uid('sty'), ...c.value, likes: [], addedAt: Date.now() });
   await st.save();
@@ -352,6 +366,12 @@ router.put('/me/styles/:styleId', requireAuth, async (req, res) => {
   if (!style) return res.status(404).json({ error: 'Service not found.' });
   const c = checkService(req.body || {}, { partial: true });
   if (c.error) return res.status(400).json({ error: c.error });
+  if ('serviceKey' in c.value || 'styleKey' in c.value) {
+    const catalog = await getCatalog();
+    const svc = c.value.serviceKey ? catalog.find((x) => x.key === c.value.serviceKey) : null;
+    if (c.value.serviceKey && !svc) return res.status(400).json({ error: 'Unknown service.' });
+    if (c.value.styleKey && (!svc || !svc.styles.some((x) => x.key === c.value.styleKey))) return res.status(400).json({ error: 'That style doesn\u2019t belong to the chosen service.' });
+  }
   if ('photo' in c.value && V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb)
       - V.photoLen(style.photo) - V.photoLen(style.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) {
     return res.status(400).json({ error: V.STORAGE_FULL });
@@ -394,7 +414,7 @@ router.post('/me/verify', requireAuth, async (req, res) => {
     const nameCheck = cleanLegalName(req.body.legalFullName);
     if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
     // Which documents count depends on the professional's country.
-    const country = COUNTRIES[countryOf(st)];
+    const country = getCountry(countryOf(st));
     const allowed = country.idDocuments.map(([k]) => k);
     const idType = req.body.idType || (allowed.length === 1 ? allowed[0] : null);
     if (!allowed.includes(idType)) return res.status(400).json({ error: `Choose an ID document accepted in ${country.name}.` });
@@ -617,15 +637,74 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
 router.post('/me/staff', requireAuth, async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Enter the phone number of their own Sheeba account.' });
-  const staffAccount = await Stylist.findOne({ phone });
+  const staffAccount = await Stylist.findOne({ phone: { $in: phoneCandidates(phone) } }); // any format: numbers are stored internationally
   if (!staffAccount) return res.status(404).json({ error: 'No Sheeba account found with that phone number — they need to register their own account first.' });
   if (staffAccount._id.toString() === req.stylistId) return res.status(400).json({ error: 'You can\'t add yourself as staff.' });
   const owner = await Stylist.findById(req.stylistId);
   if (owner.staffAccess.some(s => s.stylistId === staffAccount._id.toString())) return res.status(400).json({ error: 'They already have access.' });
   owner.staffAccess.push({ stylistId: staffAccount._id.toString() });
   await owner.save();
-  await notify({ recipientId: staffAccount._id.toString(), recipientType: 'stylist', type: 'SHOP_APPROVED', title: `${owner.salonName || owner.name} gave you shop access`, message: 'You can now help manage their requests.', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
+  await notify({ recipientId: staffAccount._id.toString(), recipientType: 'stylist', type: 'STAFF_ACCESS_GRANTED', title: `${owner.salonName || owner.name} gave you shop access`, message: 'You can now help manage their requests.', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
   res.json({ ok: true, staffName: staffAccount.name });
+});
+
+// Apprentices who named this professional as their supervisor.
+// A professional proposes a service that isn't listed. It shows on their own
+// shop at once ("pending"), and goes to the admin; once approved it becomes a
+// service everyone can choose.
+router.post('/me/service-proposals', requireAuth, async (req, res) => {
+  const t = V.text(req.body.name, { label: 'Service name', min: 3, max: 40 });
+  if (!t.ok) return res.status(400).json({ error: t.error });
+  const key = slugify(t.value);
+  if (!key) return res.status(400).json({ error: 'Please use letters in the name.' });
+  const st = await Stylist.findById(req.stylistId);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const catalog = await getCatalog();
+  const existing = catalog.find((c) => c.key === key || c.name.toLowerCase() === t.value.toLowerCase());
+  if (existing) { // already offered on Sheeba: just add it
+    st.services = [...new Set([...servicesOf(st), existing.key])];
+    await st.save();
+    return res.json({ added: existing.key, name: existing.name });
+  }
+  if ((st.pendingServices || []).length >= 3) return res.status(400).json({ error: 'You already have 3 services waiting for approval.' });
+  let proposal = await ServiceType.findOne({ key, status: 'PENDING' });
+  if (!proposal) {
+    proposal = await ServiceType.create({ key, name: t.value, proposedBy: st._id.toString() });
+    await notifyAllAdmins({ type: 'SERVICE_PROPOSED', title: `New service proposed: ${t.value}`, message: `by ${st.salonName || st.name}`, entityType: 'admin', entityId: proposal._id.toString(), priority: 'action_required' });
+  }
+  if (!(st.pendingServices || []).some((p) => p.proposalId === proposal._id.toString())) {
+    st.pendingServices = [...(st.pendingServices || []), { proposalId: proposal._id.toString(), name: proposal.name }];
+    await st.save();
+  }
+  res.json({ pending: true, name: proposal.name });
+});
+
+router.get('/me/apprentices', requireAuth, async (req, res) => {
+  const list = await Stylist.find({ supervisorId: String(req.stylistId), role: 'APPRENTICE' }, 'name supervisorStatus createdAt');
+  res.json(list.map((a) => ({ _id: a._id, name: a.name, status: a.supervisorStatus, since: a.createdAt })));
+});
+
+// Confirm an apprentice: they join this shop's staff access (existing system).
+router.post('/me/apprentices/:id/:decision', requireAuth, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'decline'].includes(decision)) return res.status(404).json({ error: 'Not found.' });
+  let a = null;
+  try { a = await Stylist.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!a || a.role !== 'APPRENTICE' || a.supervisorId !== String(req.stylistId)) return res.status(404).json({ error: 'No such apprentice request.' });
+  if (a.supervisorStatus !== 'PENDING') return res.status(400).json({ error: 'You already answered this request.' });
+  const owner = await Stylist.findById(req.stylistId);
+  if (decision === 'approve') {
+    if (!owner.staffAccess.some((x) => x.stylistId === a._id.toString())) owner.staffAccess.push({ stylistId: a._id.toString() });
+    await owner.save();
+    a.supervisorStatus = 'APPROVED';
+  } else {
+    a.supervisorStatus = 'DECLINED';
+  }
+  await a.save();
+  await notify({ recipientId: a._id.toString(), recipientType: 'stylist', type: decision === 'approve' ? 'APPRENTICE_APPROVED' : 'APPRENTICE_DECLINED',
+    title: decision === 'approve' ? `${owner.salonName || owner.name} confirmed you as their apprentice` : `${owner.salonName || owner.name} declined your apprentice request`,
+    message: decision === 'approve' ? 'You can now help with their shop\u2019s requests.' : '', entityType: 'shop', entityId: owner._id.toString(), priority: 'important' });
+  res.json({ ok: true, status: a.supervisorStatus });
 });
 
 router.get('/me/staff', requireAuth, async (req, res) => {

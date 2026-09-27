@@ -12,12 +12,17 @@ const Stylist = require('../models/Stylist');
 const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
 const { notify } = require('./notifications');
-const { phoneCandidates, checkNewPassword, canonicalPhone } = require('../lib/passwords');
-const { uniqueCode, ensureCode } = require('../lib/codes');
+const { phoneCandidates, checkNewPassword, toE164 } = require('../lib/passwords');
+const { ensureCode } = require('../lib/codes');
+const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
+const { getSetting } = require('../lib/settings');
+const { checkAge } = require('../lib/age');
+const { notifyAllAdmins } = require('./notifications');
 const { recordInvite } = require('../lib/invites');
 const { checkCountry } = require('../lib/countries');
 const V = require('../lib/validate');
 const { discoverCard } = require('../lib/discover');
+const { getCatalog } = require('../lib/catalog');
 
 const router = express.Router();
 
@@ -42,8 +47,18 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const countryCheck = checkCountry(req.body.country);
     if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
-    const customer = await Customer.create({ phone: canonicalPhone(phone), passwordHash, name, code: await uniqueCode(Stylist, Customer), country: countryCheck.value });
+    const phoneCheck = toE164(phone, countryCheck.value);
+    if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+    let ageFields = {};
+    if (await getSetting('ageCheck')) {
+      const a = checkAge(req.body, { apprentice: false });
+      if (!a.ok) return res.status(400).json({ error: a.error });
+      ageFields = a.value;
+    }
+    const memberNumber = await nextMemberNumber({ Stylist, Customer });
+    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields });
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
+    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${customer.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: customer._id.toString(), priority: 'important' });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
@@ -137,6 +152,27 @@ router.delete('/me/styles/:id', requireCustomerAuth, async (req, res) => {
 // ---------- Saved/followed shops: reuses the EXISTING follow mechanism on
 // Stylist.followers — no new model, this is just this customer's own view
 // of data that already exists. ----------
+// Feed preferences from onboarding. Both optional; "skip" is fine.
+router.put('/me/preferences', requireCustomerAuth, async (req, res) => {
+  const c = await Customer.findById(req.customerId);
+  if (!c) return res.status(404).json({ error: 'Not found.' });
+  if (req.body.feedFor !== undefined) {
+    if (![null, 'MEN', 'WOMEN', 'BOTH'].includes(req.body.feedFor)) return res.status(400).json({ error: 'Unknown choice.' });
+    c.feedFor = req.body.feedFor;
+  }
+  if (req.body.favourites !== undefined) {
+    if (!Array.isArray(req.body.favourites)) return res.status(400).json({ error: 'Choose up to 3 favourites.' });
+    const favs = [...new Set(req.body.favourites.map(String))];
+    if (favs.length > 3) return res.status(400).json({ error: 'Choose up to 3 favourites.' });
+    const known = new Set((await getCatalog()).flatMap((sv) => (sv.styles || []).map((st) => st.key)));
+    if (favs.some((f) => !known.has(f))) return res.status(400).json({ error: 'Unknown style.' });
+    c.favourites = favs;
+  }
+  c.onboardedAt = c.onboardedAt || Date.now();
+  await c.save();
+  res.json({ feedFor: c.feedFor, favourites: c.favourites, onboardedAt: c.onboardedAt });
+});
+
 router.get('/me/following', requireCustomerAuth, async (req, res) => {
   const shops = await Stylist.find({ followers: req.customerId, status: 'APPROVED' });
   // The same lean, public-safe card as Discover. (This used to send each

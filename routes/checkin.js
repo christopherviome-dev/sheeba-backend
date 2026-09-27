@@ -2,8 +2,8 @@ const express = require('express');
 const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const Request = require('../models/Request');
-const { requireAuth } = require('../middleware/auth');
-const { normalizeCode } = require('../lib/codes');
+const { requireAuth, requireCustomerAuth } = require('../middleware/auth');
+const { normalizeCode, codeQuery } = require('../lib/codes');
 const { notify } = require('./notifications');
 
 const router = express.Router();
@@ -14,6 +14,38 @@ async function canActFor(stylistId, shopId) {
   try { return !!(await Stylist.exists({ _id: shopId, 'staffAccess.stylistId': String(stylistId) })); } catch (e) { return false; }
 }
 
+// ---- Customer self check-in: the customer scans the SHOP's QR on arrival. ----
+// These come first so "/self/..." isn't mistaken for a code by the routes below.
+// Allowed only for the customer's own accepted appointment with that shop,
+// within a few hours either side of its time.
+const WINDOW = 6 * 3600 * 1000;
+async function selfCandidate(customerId, shopCode) {
+  const code = normalizeCode(shopCode);
+  const shop = code ? await Stylist.findOne(codeQuery(code)) : null;
+  if (!shop) return { shop: null, appt: null };
+  const now = Date.now();
+  const mine = (await Request.find({ clientId: String(customerId) })).filter((r) => String(r.stylistId) === shop._id.toString()
+    && r.status === 'accepted' && r.preferredAt && Math.abs(r.preferredAt - now) <= WINDOW);
+  mine.sort((a, b) => Math.abs(a.preferredAt - now) - Math.abs(b.preferredAt - now));
+  return { shop, appt: mine[0] || null };
+}
+
+router.get('/self/:code', requireCustomerAuth, async (req, res) => {
+  const { shop, appt } = await selfCandidate(req.customerId, req.params.code);
+  if (!shop || !appt) return res.json({ found: false });
+  res.json({ found: true, shopName: shop.salonName || shop.name, appointment: { _id: appt._id, service: appt.serviceNameSnapshot || 'Service', preferredAt: appt.preferredAt, checkedInAt: appt.checkedInAt || null } });
+});
+
+router.post('/self/:code', requireCustomerAuth, async (req, res) => {
+  const { shop, appt } = await selfCandidate(req.customerId, req.params.code);
+  if (!shop || !appt) return res.status(400).json({ error: 'No appointment with this shop right now.' });
+  if (appt.checkedInAt) return res.json({ ok: true, checkedInAt: appt.checkedInAt, already: true });
+  appt.checkedInAt = Date.now(); appt.checkedInBy = 'customer';
+  await appt.save();
+  await notify({ recipientId: shop._id.toString(), recipientType: 'stylist', type: 'CUSTOMER_CHECKED_IN', title: `${String((await Customer.findById(req.customerId, 'name') || {}).name || 'Your customer').split(' ')[0]} has arrived`, message: appt.serviceNameSnapshot || '', entityType: 'request', entityId: appt._id.toString(), priority: 'important' });
+  res.json({ ok: true, checkedInAt: appt.checkedInAt });
+});
+
 // A professional scanned (or typed) a customer's Sheeba code.
 // PRIVACY: the customer's name is only revealed if this professional already
 // has an appointment with them. Otherwise the reply says so and nothing else,
@@ -21,7 +53,7 @@ async function canActFor(stylistId, shopId) {
 router.get('/:code', requireAuth, async (req, res) => {
   const code = normalizeCode(req.params.code);
   if (!code) return res.status(404).json({ error: 'That isn\u2019t a Sheeba code.' });
-  const customer = await Customer.findOne({ code });
+  const customer = await Customer.findOne(codeQuery(code));
   if (!customer) return res.status(404).json({ error: 'That code doesn\u2019t belong to a customer.' });
   const shopIds = [String(req.stylistId)];
   try { (await Stylist.find({ 'staffAccess.stylistId': String(req.stylistId) })).forEach((s) => shopIds.push(s._id.toString())); } catch (e) { /* no staff access */ }
@@ -48,11 +80,11 @@ router.post('/:requestId', requireAuth, async (req, res) => {
   try { r = await Request.findById(req.params.requestId); } catch (e) { /* bad id */ }
   if (!r) return res.status(404).json({ error: 'Appointment not found.' });
   if (!(await canActFor(req.stylistId, r.stylistId))) return res.status(403).json({ error: 'This isn\u2019t your appointment.' });
-  const customer = await Customer.findOne({ code });
+  const customer = await Customer.findOne(codeQuery(code));
   if (!customer || String(customer._id) !== String(r.clientId)) return res.status(400).json({ error: 'That code doesn\u2019t match this appointment\u2019s customer.' });
   if (r.status !== 'accepted') return res.status(400).json({ error: 'Accept the appointment first, then check them in.' });
   if (r.checkedInAt) return res.json({ ok: true, checkedInAt: r.checkedInAt, already: true });
-  r.checkedInAt = Date.now();
+  r.checkedInAt = Date.now(); r.checkedInBy = 'professional';
   await r.save();
   const shop = await Stylist.findById(r.stylistId, 'name salonName');
   await notify({ recipientId: String(r.clientId), recipientType: 'customer', type: 'REQUEST_ACCEPTED', title: `You're checked in at ${shop ? (shop.salonName || shop.name) : 'your appointment'}`, message: r.serviceNameSnapshot || '', entityType: 'request', entityId: r._id.toString(), priority: 'normal' });

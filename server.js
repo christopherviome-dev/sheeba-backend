@@ -39,6 +39,9 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/u', require('./routes/codes'));
 app.use('/api/invites', require('./routes/invites'));
 app.use('/api/checkin', require('./routes/checkin'));
+app.use('/api/settings', require('./routes/settings'));
+app.use('/api/catalog', require('./routes/catalog'));
+app.use('/api/prices', require('./routes/prices'));
 app.use('/api', messageRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api/stylists', crmRoutes);
@@ -68,6 +71,10 @@ const PORT = process.env.PORT || 4000;
 
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
+    // One-time: give existing accounts member numbers and friendly codes, in join order.
+    require('./lib/members').ensureMemberNumbers({ Stylist: require('./models/Stylist'), Customer: require('./models/Customer') })
+      .then((did) => { if (did) console.log('Member numbers assigned to existing accounts.'); })
+      .catch((e) => console.error('Member numbering failed:', e.message));
     console.log('Connected to MongoDB');
     app.listen(PORT, () => console.log(`Sheeba API listening on port ${PORT}`));
   })

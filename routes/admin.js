@@ -3,7 +3,7 @@ const AdminAction = require('../models/AdminAction');
 const Stylist = require('../models/Stylist');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { normalizeGhanaCard, normalizeIdNumber, compareNames } = require('../lib/identity');
-const { COUNTRIES, countryOf } = require('../lib/countries');
+const { getCountry, countryOf } = require('../lib/countries');
 // One key per real document, whatever its type, for duplicate detection.
 const docKey = (s) => {
   if (s.ghanaCardNum) return 'GHANA_CARD:' + (normalizeGhanaCard(s.ghanaCardNum) || String(s.ghanaCardNum).toUpperCase().trim());
@@ -17,6 +17,9 @@ const { generateTempPassword } = require('../lib/passwords');
 const InviteReward = require('../models/InviteReward');
 const Request = require('../models/Request');
 const { notify } = require('./notifications');
+const { validateDue } = require('../lib/invites');
+const { setSetting } = require('../lib/settings');
+const ServiceType = require('../models/ServiceType');
 
 const router = express.Router();
 
@@ -57,9 +60,9 @@ router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
         salonName: s.salonName,
         phone: s.phone,
         legalFullName: s.legalFullName,
-        country: COUNTRIES[countryOf(s)].name,
+        country: getCountry(countryOf(s)).name,
         idType: s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null),
-        idLabel: ((COUNTRIES[countryOf(s)].idDocuments.find(([k]) => k === (s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null))) || [null, 'ID document'])[1]),
+        idLabel: ((getCountry(countryOf(s)).idDocuments.find(([k]) => k === (s.idType || (s.ghanaCardNum ? 'GHANA_CARD' : null))) || [null, 'ID document'])[1]),
         ghanaCardNum: s.ghanaCardNum || s.idNumber, // the document number, whatever its type (name kept for the app)
         cardFormatValid: s.ghanaCardNum ? !!normalizeGhanaCard(s.ghanaCardNum) : !!normalizeIdNumber(s.idNumber),
         verifyPhoto: s.verifyPhoto,
@@ -129,8 +132,11 @@ router.post('/password-resets/:id/dismiss', requireAuth, requireAdmin, async (re
 // Earned-but-unpaid rewards, grouped by the person to pay. Each shows the job
 // that qualified it, so the admin can check it's genuine before paying by hand.
 router.get('/invite-rewards', requireAuth, requireAdmin, async (req, res) => {
-  const status = ['EARNED', 'PAID', 'VOID', 'JOINED'].includes(req.query.status) ? req.query.status : 'EARNED';
-  const rewards = await InviteReward.find({ status }).sort({ earnedAt: 1, createdAt: 1 });
+  await validateDue();
+  // Default view: the ones that need a human decision.
+  const VIEWS = { UNDER_REVIEW: ['UNDER_REVIEW'], CHECKING: ['CHECKING', 'EARNED'], VALIDATED: ['VALIDATED', 'PAID'], VOID: ['VOID'], JOINED: ['JOINED'] };
+  const view = VIEWS[req.query.status] ? req.query.status : 'UNDER_REVIEW';
+  const rewards = await InviteReward.find({ status: { $in: VIEWS[view] } }).sort({ earnedAt: 1, createdAt: 1 });
   const load = async (type, id, fields) => {
     const M = type === 'customer' ? Customer : Stylist;
     try { return await M.findById(id, fields); } catch (e) { return null; }
@@ -155,32 +161,24 @@ router.get('/invite-rewards', requireAuth, requireAdmin, async (req, res) => {
       }
     }
     groups[key].totalMinor += r.amountMinor || 0;
-    groups[key].rewards.push({ _id: r._id, status: r.status, amountMinor: r.amountMinor, currency: r.currency, flag: r.flag,
+    groups[key].rewards.push({ _id: r._id, status: r.status, amountMinor: r.amountMinor, currency: r.currency, flag: r.flag, flags: r.flags && r.flags.length ? r.flags : (r.flag ? [r.flag] : []),
       referredName: referred ? referred.name : 'Account no longer exists', referredPhone: referred ? referred.phone : null, joinedAs: r.referredType,
       joinedAt: r.createdAt, earnedAt: r.earnedAt, paidAt: r.paidAt, paymentNote: r.paymentNote, voidReason: r.voidReason, job });
   }
-  const count = async (st) => InviteReward.countDocuments({ status: st });
-  res.json({ summary: { joined: await count('JOINED'), earned: await count('EARNED'), paid: await count('PAID'), voided: await count('VOID') }, groups: Object.values(groups) });
+  const count = async (...st) => InviteReward.countDocuments({ status: { $in: st } });
+  res.json({ view, summary: { joined: await count('JOINED'), checking: await count('CHECKING', 'EARNED'), underReview: await count('UNDER_REVIEW'), validated: await count('VALIDATED', 'PAID'), voided: await count('VOID') }, groups: Object.values(groups) });
 });
 
-// Mark rewards as paid after sending the money by hand (e.g. Mobile Money).
-// All must belong to one person and still be unpaid; the note is kept.
-router.post('/invite-rewards/pay', requireAuth, requireAdmin, async (req, res) => {
-  const ids = Array.isArray(req.body.rewardIds) ? req.body.rewardIds.map(String) : [];
-  const note = typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : '';
-  if (ids.length === 0) return res.status(400).json({ error: 'Choose at least one reward.' });
-  let rewards = [];
-  try { rewards = await InviteReward.find({ _id: { $in: ids } }); } catch (e) { return res.status(400).json({ error: 'Invalid reward.' }); }
-  if (rewards.length !== ids.length) return res.status(404).json({ error: 'Some of those rewards no longer exist.' });
-  if (rewards.some((r) => r.status !== 'EARNED')) return res.status(400).json({ error: 'Only earned, unpaid rewards can be marked paid.' });
-  const owner = rewards[0].referrerType + ':' + rewards[0].referrerId;
-  if (rewards.some((r) => r.referrerType + ':' + r.referrerId !== owner)) return res.status(400).json({ error: 'Pay one person at a time.' });
-  const now = Date.now();
-  const result = await InviteReward.updateMany({ _id: { $in: ids }, status: 'EARNED' }, { $set: { status: 'PAID', paidAt: now, paidBy: req.stylistId, paymentNote: note || null } });
-  const total = rewards.reduce((t, r) => t + (r.amountMinor || 0), 0);
-  try { await AdminAction.create({ adminId: req.stylistId, action: 'INVITE_REWARDS_PAID', targetType: rewards[0].referrerType, targetId: rewards[0].referrerId, reason: `${ids.length} reward(s), ${total} ${rewards[0].currency || ''} minor units${note ? ' · ' + note : ''}` }); } catch (e) { /* non-fatal */ }
-  await notify({ recipientId: rewards[0].referrerId, recipientType: rewards[0].referrerType, type: 'INVITE_REWARD_PAID', title: 'Your invite reward was sent', message: note ? `Reference: ${note}` : 'Thank you for helping Sheeba grow.', entityType: null, entityId: null, priority: 'important' });
-  res.json({ ok: true, paid: result.modifiedCount != null ? result.modifiedCount : ids.length });
+// Confirm a reward the admin has checked (from "under review" or "checking").
+router.post('/invite-rewards/:id/validate', requireAuth, requireAdmin, async (req, res) => {
+  let r = null;
+  try { r = await InviteReward.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!r) return res.status(404).json({ error: 'Reward not found.' });
+  if (!['UNDER_REVIEW', 'CHECKING', 'EARNED'].includes(r.status)) return res.status(400).json({ error: 'Only rewards being checked or under review can be confirmed.' });
+  r.status = 'VALIDATED'; r.validatedAt = Date.now(); r.validatedBy = req.stylistId;
+  await r.save();
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'INVITE_REWARD_VALIDATED', targetType: 'invite-reward', targetId: r._id.toString() }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true });
 });
 
 // Void a reward that isn't genuine (a reason is required and kept).
@@ -190,12 +188,59 @@ router.post('/invite-rewards/:id/void', requireAuth, requireAdmin, async (req, r
   let r = null;
   try { r = await InviteReward.findById(req.params.id); } catch (e) { /* bad id */ }
   if (!r) return res.status(404).json({ error: 'Reward not found.' });
-  if (r.status === 'PAID') return res.status(400).json({ error: 'This reward was already paid.' });
+  if (r.status === 'PAID') return res.status(400).json({ error: 'This reward was already paid out.' });
   if (r.status === 'VOID') return res.status(400).json({ error: 'Already voided.' });
   r.status = 'VOID'; r.voidReason = reason.slice(0, 300);
   await r.save();
   try { await AdminAction.create({ adminId: req.stylistId, action: 'INVITE_REWARD_VOIDED', targetType: 'invite-reward', targetId: r._id.toString(), reason }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true });
+});
+
+// ---------- Proposed services ----------
+router.get('/service-proposals', requireAuth, requireAdmin, async (req, res) => {
+  const pending = await ServiceType.find({ status: 'PENDING' });
+  const out = [];
+  for (const p of pending) {
+    const shops = await Stylist.find({ 'pendingServices.proposalId': p._id.toString() }, 'name salonName');
+    out.push({ _id: p._id, name: p.name, key: p.key, createdAt: p.createdAt, shops: shops.map((x) => x.salonName || x.name) });
+  }
+  res.json(out);
+});
+
+router.post('/service-proposals/:id/:decision', requireAuth, requireAdmin, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'reject'].includes(decision)) return res.status(404).json({ error: 'Not found.' });
+  let p = null;
+  try { p = await ServiceType.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!p || p.status !== 'PENDING') return res.status(404).json({ error: 'No such proposal waiting.' });
+  const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 200) : '';
+  if (decision === 'reject' && reason.length < 5) return res.status(400).json({ error: 'Give a short reason for the professional.' });
+  p.status = decision === 'approve' ? 'ACTIVE' : 'REJECTED';
+  p.decidedAt = Date.now(); p.decidedBy = req.stylistId; if (decision === 'reject') p.rejectReason = reason;
+  await p.save();
+  // Every shop waiting on it: approved → it becomes one of their services; either way it stops being pending.
+  const shops = await Stylist.find({ 'pendingServices.proposalId': p._id.toString() });
+  const { servicesOf } = require('../lib/catalog');
+  for (const st of shops) {
+    st.pendingServices = (st.pendingServices || []).filter((x) => x.proposalId !== p._id.toString());
+    if (decision === 'approve') st.services = [...new Set([...servicesOf(st), p.key])];
+    await st.save();
+    await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED',
+      title: decision === 'approve' ? `"${p.name}" is now a Sheeba service` : `"${p.name}" wasn't added as a service`, message: decision === 'approve' ? 'Customers can now find you for it.' : reason, entityType: 'shop', entityId: st._id.toString(), priority: 'normal' });
+  }
+  try { await AdminAction.create({ adminId: req.stylistId, action: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED', targetType: 'service', targetId: p._id.toString(), reason: decision === 'approve' ? p.name : `${p.name}: ${reason}` }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, status: p.status });
+});
+
+// ---------- Admin switches ----------
+const SWITCHES = { ageCheck: 'boolean' };
+router.put('/settings/:key', requireAuth, requireAdmin, async (req, res) => {
+  const { key } = req.params;
+  if (!SWITCHES[key]) return res.status(404).json({ error: 'Unknown setting.' });
+  if (typeof req.body.value !== 'boolean') return res.status(400).json({ error: 'Choose on or off.' });
+  await setSetting(key, req.body.value, req.stylistId);
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'SETTING_CHANGED', targetType: 'setting', targetId: key, reason: `${key} ${req.body.value ? 'on' : 'off'}` }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, key, value: req.body.value });
 });
 
 module.exports = router;

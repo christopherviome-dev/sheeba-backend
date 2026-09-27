@@ -8,14 +8,27 @@ const CustomerSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   name: { type: String, required: true },
   // Which country this account is in (lib/countries.js). Older accounts: Ghana.
-  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
+  country: { type: String, default: 'GH' }, // ISO code, checked against lib/worldCountries.js
   // Sheeba code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
+  // Join order; #1-1,000 are founding members (lib/members.js). No default on
+  // purpose: the unique index must never see two empty values.
+  memberNumber: { type: Number },
+  legacyCodes: { type: [String], default: [] }, // earlier codes, still accepted
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
   invitedById: { type: String, default: null },
   // Set when an admin issues a temporary password (see Stylist).
+  // Age check (only when the admin has it switched on; see lib/age.js).
+  ageConfirmedAt: { type: Number, default: null },
+  // Optional feed preferences from onboarding (never shown to professionals):
+  // whose styles to show first, and up to 3 favourite styles (lib/catalog.js keys).
+  feedFor: { type: String, enum: ['MEN', 'WOMEN', 'BOTH', null], default: null },
+  favourites: { type: [String], default: [] },
+  onboardedAt: { type: Number, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
 }, { timestamps: true });
+CustomerSchema.index({ legacyCodes: 1 });
+CustomerSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.models.Customer || mongoose.model('Customer', CustomerSchema);

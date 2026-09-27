@@ -11,6 +11,8 @@ const StyleSchema = new mongoose.Schema({
   // mobile data (~30 KB instead of ~150 KB). Made by the app at upload time.
   photoThumb: { type: String, default: null },
   addedAt: { type: Number, default: null }, // when the service was added ("New looks")
+  serviceKey: { type: String, default: null }, // which service this menu item belongs to (lib/catalog.js)
+  styleKey: { type: String, default: null },   // which named style, if any
   colorTag: String,
   active: { type: Boolean, default: true },
   // Payment is opt-in per service, per the trust-first philosophy — every
@@ -49,8 +51,29 @@ const StylistSchema = new mongoose.Schema({
   workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
   // Sheeba code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
+  // Join order; #1-1,000 are founding members (lib/members.js). No default on
+  // purpose: the unique index must never see two empty values.
+  memberNumber: { type: Number },
+  legacyCodes: { type: [String], default: [] }, // earlier codes, still accepted
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
   invitedById: { type: String, default: null },
+  // Apprentices (professionals in training) sign up with their supervisor's
+  // code; the supervisor confirms, which adds them to the shop's staff access.
+  role: { type: String, enum: ['PROFESSIONAL', 'APPRENTICE'], default: 'PROFESSIONAL' },
+  supervisorId: { type: String, default: null },
+  supervisorStatus: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', null], default: null },
+  // Age check (only when the admin has it switched on; see lib/age.js).
+  ageConfirmedAt: { type: Number, default: null },
+  isMinor: { type: Boolean, default: false }, // a 15-17 year old apprentice: never public, no direct bookings
+  guardianName: { type: String, default: null },
+  guardianPhone: { type: String, default: null },
+  guardianConsentAt: { type: Number, default: null },
+  // What this professional offers (service keys from lib/catalog.js), and any
+  // service they proposed that's waiting for admin approval (shown on their
+  // own shop in the meantime).
+  services: { type: [String], default: [] },
+  city: { type: String, default: null }, // e.g. Accra, Kumasi, London (area = neighbourhood)
+  pendingServices: { type: [{ proposalId: String, name: String }], default: [] },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,
@@ -89,11 +112,11 @@ const StylistSchema = new mongoose.Schema({
   // matching every price already entered on the platform.
   currency: { type: String, default: 'GHS' },
   // Which country this account is in (lib/countries.js). Older accounts: Ghana.
-  country: { type: String, enum: ['GH', 'GB'], default: 'GH' },
+  country: { type: String, default: 'GH' }, // ISO code, checked against lib/worldCountries.js
   // Identity document type for verification (Ghana Card in Ghana; passport,
   // driving licence etc. elsewhere). Ghana Card numbers stay in ghanaCardNum;
   // other documents' numbers go in idNumber.
-  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', null], default: null },
+  idType: { type: String, enum: ['GHANA_CARD', 'PASSPORT', 'DRIVING_LICENCE', 'BRP', 'NATIONAL_ID', null], default: null },
   idNumber: { type: String, default: null },
   // Real coordinates, set only when the professional explicitly opts in via
   // their own device's GPS — never required, never inferred from IP or
@@ -103,5 +126,7 @@ const StylistSchema = new mongoose.Schema({
     lng: { type: Number, default: null },
   },
 }, { timestamps: true });
+StylistSchema.index({ legacyCodes: 1 });
+StylistSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);
