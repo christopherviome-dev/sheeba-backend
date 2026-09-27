@@ -74,7 +74,7 @@ const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : undefined
 router.post('/', async (req, res) => {
   try {
     const { stylistId, styleId, clientId, ref } = req.body;
-    const meet = ['provider', 'client'].includes(req.body.meet) ? req.body.meet : null;
+    const meet = ['provider', 'client', 'midway'].includes(req.body.meet) ? req.body.meet : null // midway = "somewhere in between";
     const emergency = clip(req.body.emergency, 120); // an emergency contact: a name and number
     const clientName = clip(req.body.clientName, 100);
     const clientPhone = clip(req.body.clientPhone, 30);

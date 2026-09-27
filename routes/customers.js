@@ -33,7 +33,7 @@ function makeToken(customer) {
   return jwt.sign({ id: customer._id.toString(), role: 'customer' }, process.env.JWT_SECRET, { expiresIn: '90d' });
 }
 function publicCustomer(c) {
-  const obj = c.toObject ? c.toObject() : c;
+  const obj = c.toObject ? c.toObject() : { ...c }; // always a copy: never alter the stored record
   delete obj.passwordHash;
   return obj;
 }
@@ -219,7 +219,7 @@ router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) =
   const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : null);
   const date = clip(req.body.date, 100), note = clip(req.body.note, 1000), emergency = clip(req.body.emergency, 120);
   const budget = clip(req.body.budget, 50), area = clip(req.body.area, 100);
-  const meet = ['provider', 'client'].includes(req.body.meet) ? req.body.meet : null;
+  const meet = ['provider', 'client', 'midway'].includes(req.body.meet) ? req.body.meet : null // midway = "somewhere in between";
   let preferredAt = null; // same rule as a normal booking: a real moment within the next year
   if (req.body.preferredAt !== undefined && req.body.preferredAt !== null) {
     const t = Number(req.body.preferredAt), now = Date.now();
