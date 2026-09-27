@@ -16,6 +16,10 @@ const { phoneCandidates, checkNewPassword, toE164 } = require('../lib/passwords'
 const { ensureCode } = require('../lib/codes');
 const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
 const { getSetting } = require('../lib/settings');
+const attempts = require('../lib/attempts');
+// Compared against when no account matches, so a wrong number takes as long
+// as a wrong password: a genuine hash of random text, made fresh at startup.
+const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
 const { checkAge } = require('../lib/age');
 const { notifyAllAdmins } = require('./notifications');
 const { recordInvite } = require('../lib/invites');
@@ -69,10 +73,19 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
+    // Password guessing: paused after too many wrong attempts (lib/attempts.js).
+    const keys = attempts.loginKeys('customer', phone, req.ip);
+    const blocked = attempts.loginBlocked(keys);
+    if (blocked.blocked) return res.status(429).json({ error: attempts.LOCKED_MESSAGE(blocked.retryMinutes) });
     const customer = await Customer.findOne({ phone: { $in: phoneCandidates(phone) } });
-    if (!customer) return res.status(401).json({ error: 'No account found with that phone number.' });
-    const ok = await bcrypt.compare(password, customer.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
+    // The SAME answer, and the same amount of work, whether or not the number
+    // has an account: otherwise anyone could check who uses Sheeba.
+    const ok = await bcrypt.compare(String(password || ''), customer ? customer.passwordHash : DUMMY_HASH);
+    if (!customer || !ok) {
+      attempts.loginFailed(keys);
+      return res.status(401).json({ error: 'That phone number and password don\u2019t match. Check both, or use "Forgot password".' });
+    }
+    attempts.loginSucceeded(keys);
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
     res.status(500).json({ error: 'Login failed.' });

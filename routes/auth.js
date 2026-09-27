@@ -14,6 +14,10 @@ const { recordInvite } = require('../lib/invites');
 const { normalizeCode, codeQuery } = require('../lib/codes');
 const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
 const { getSetting } = require('../lib/settings');
+const attempts = require('../lib/attempts');
+// Compared against when no account matches, so a wrong number takes as long
+// as a wrong password: a genuine hash of random text, made fresh at startup.
+const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
 const { checkAge } = require('../lib/age');
 const { notify } = require('./notifications');
 
@@ -86,10 +90,19 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
+    // Password guessing: paused after too many wrong attempts (lib/attempts.js).
+    const keys = attempts.loginKeys('stylist', phone, req.ip);
+    const blocked = attempts.loginBlocked(keys);
+    if (blocked.blocked) return res.status(429).json({ error: attempts.LOCKED_MESSAGE(blocked.retryMinutes) });
     const stylist = await Stylist.findOne({ phone: { $in: phoneCandidates(phone) } });
-    if (!stylist) return res.status(401).json({ error: 'No account found with that phone number.' });
-    const ok = await bcrypt.compare(password, stylist.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
+    // The SAME answer, and the same amount of work, whether or not the number
+    // has an account: otherwise anyone could check who uses Sheeba.
+    const ok = await bcrypt.compare(String(password || ''), stylist ? stylist.passwordHash : DUMMY_HASH);
+    if (!stylist || !ok) {
+      attempts.loginFailed(keys);
+      return res.status(401).json({ error: 'That phone number and password don\u2019t match. Check both, or use "Forgot password".' });
+    }
+    attempts.loginSucceeded(keys);
     if (['SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(stylist.accountStatus)) {
       return res.status(403).json({ error: `This account is ${stylist.accountStatus.toLowerCase()}${stylist.restrictionReason ? ': ' + stylist.restrictionReason : '.'}` });
     }
@@ -104,6 +117,11 @@ router.post('/login', async (req, res) => {
 // who uses Sheeba. A real account gets at most one open request at a time.
 router.post('/forgot-password', async (req, res) => {
   const reply = { ok: true, message: 'If an account uses this number, Sheeba will call that number to confirm it\'s you, then give you a temporary password.' };
+  // Someone submitting many numbers to flood the admin's queue: paused per address.
+  const ipKey = `reset-ip:${req.ip || 'unknown'}`;
+  const blocked = attempts.status([ipKey]);
+  if (blocked.blocked) return res.status(429).json({ error: `Too many requests. Please wait ${blocked.retryMinutes} minutes and try again.` });
+  attempts.fail([[ipKey, attempts.LIMITS.resetIp]]);
   try {
     const accountType = req.body.accountType === 'customer' ? 'customer' : 'stylist';
     const Model = accountType === 'customer' ? Customer : Stylist;

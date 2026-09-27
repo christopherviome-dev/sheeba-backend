@@ -21,6 +21,9 @@ const paymentRoutes = require('./routes/payments');
 const adminRoutes = require('./routes/admin');
 
 const app = express();
+// Render sits in front of the server: trust its proxy so each visitor's real
+// address is known (needed to limit password guessing per address, not per proxy).
+app.set('trust proxy', 1);
 app.use(cors());
 // The `verify` callback captures the raw, unparsed body onto req.rawBody —
 // needed because Paystack's webhook signature is computed over the exact
