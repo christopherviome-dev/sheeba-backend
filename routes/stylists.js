@@ -9,6 +9,8 @@ const { notify, notifyAllAdmins } = require('./notifications');
 const { normalizeGhanaCard, normalizeIdNumber, cleanLegalName, checkCardPhoto } = require('../lib/identity');
 const { getCountry, countryOf } = require('../lib/countries');
 const V = require('../lib/validate');
+const { getCatalog, servicesOf, slugify } = require('../lib/catalog');
+const ServiceType = require('../models/ServiceType');
 const Customer = require('../models/Customer');
 const { ensureCode } = require('../lib/codes');
 const AVAILABILITY = ['AVAILABLE', 'TAKING_REQUESTS', 'UNAVAILABLE', 'AWAY'];
@@ -277,6 +279,14 @@ router.put('/me', requireAuth, async (req, res) => {
     if (!AVAILABILITY.includes(b.availability)) return res.status(400).json({ error: 'Unknown availability.' });
     changes.availability = b.availability;
   }
+  if (b.services !== undefined) {
+    const catalog = await getCatalog();
+    if (!Array.isArray(b.services)) return res.status(400).json({ error: 'Choose what you offer.' });
+    const chosen = [...new Set(b.services.map(String))];
+    if (chosen.length > 8) return res.status(400).json({ error: 'Choose up to 8 services.' });
+    if (chosen.some((k) => !catalog.some((c) => c.key === k))) return res.status(400).json({ error: 'Unknown service.' });
+    changes.services = chosen;
+  }
   // Check the storage total BEFORE changing anything.
   let total = V.totalPhotoChars(st);
   for (const f of ['profilePhoto', 'coverPhoto']) {
@@ -317,6 +327,8 @@ function checkService(b, { partial }) {
     desc: () => V.longText(b.desc, { label: 'Description', max: 300 }),
     photo: () => V.photo(b.photo, 'service'),
     photoThumb: () => V.photo(b.photoThumb, 'thumb'),
+    serviceKey: () => (b.serviceKey === null || b.serviceKey === '' ? { ok: true, value: null } : { ok: true, value: String(b.serviceKey) }),
+    styleKey: () => (b.styleKey === null || b.styleKey === '' ? { ok: true, value: null } : { ok: true, value: String(b.styleKey) }),
   };
   for (const [field, check] of Object.entries(checks)) {
     if (b[field] === undefined) {
@@ -327,6 +339,7 @@ function checkService(b, { partial }) {
     if (!r.ok) return { error: r.error };
     out[field] = r.value;
   }
+  // Service and style must be real (checked against the catalog by the routes).
   // A thumbnail always belongs to the current photo: removing or replacing
   // the photo without a new thumbnail clears the old one.
   if ('photo' in out && !('photoThumb' in out)) out.photoThumb = null;
@@ -340,6 +353,12 @@ router.post('/me/styles', requireAuth, async (req, res) => {
   if ((st.styles || []).length >= V.MAX_SERVICES) return res.status(400).json({ error: `You can list up to ${V.MAX_SERVICES} services. Remove one to add another.` });
   const c = checkService(req.body || {}, { partial: false });
   if (c.error) return res.status(400).json({ error: c.error });
+  if ('serviceKey' in c.value || 'styleKey' in c.value) {
+    const catalog = await getCatalog();
+    const svc = c.value.serviceKey ? catalog.find((x) => x.key === c.value.serviceKey) : null;
+    if (c.value.serviceKey && !svc) return res.status(400).json({ error: 'Unknown service.' });
+    if (c.value.styleKey && (!svc || !svc.styles.some((x) => x.key === c.value.styleKey))) return res.status(400).json({ error: 'That style doesn\u2019t belong to the chosen service.' });
+  }
   if (V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) return res.status(400).json({ error: V.STORAGE_FULL });
   st.styles.push({ id: uid('sty'), ...c.value, likes: [], addedAt: Date.now() });
   await st.save();
@@ -356,6 +375,12 @@ router.put('/me/styles/:styleId', requireAuth, async (req, res) => {
   if (!style) return res.status(404).json({ error: 'Service not found.' });
   const c = checkService(req.body || {}, { partial: true });
   if (c.error) return res.status(400).json({ error: c.error });
+  if ('serviceKey' in c.value || 'styleKey' in c.value) {
+    const catalog = await getCatalog();
+    const svc = c.value.serviceKey ? catalog.find((x) => x.key === c.value.serviceKey) : null;
+    if (c.value.serviceKey && !svc) return res.status(400).json({ error: 'Unknown service.' });
+    if (c.value.styleKey && (!svc || !svc.styles.some((x) => x.key === c.value.styleKey))) return res.status(400).json({ error: 'That style doesn\u2019t belong to the chosen service.' });
+  }
   if ('photo' in c.value && V.totalPhotoChars(st) + V.photoLen(c.value.photo) + V.photoLen(c.value.photoThumb)
       - V.photoLen(style.photo) - V.photoLen(style.photoThumb) > V.MAX_TOTAL_PHOTO_CHARS) {
     return res.status(400).json({ error: V.STORAGE_FULL });
@@ -633,6 +658,36 @@ router.post('/me/staff', requireAuth, async (req, res) => {
 });
 
 // Apprentices who named this professional as their supervisor.
+// A professional proposes a service that isn't listed. It shows on their own
+// shop at once ("pending"), and goes to the admin; once approved it becomes a
+// service everyone can choose.
+router.post('/me/service-proposals', requireAuth, async (req, res) => {
+  const t = V.text(req.body.name, { label: 'Service name', min: 3, max: 40 });
+  if (!t.ok) return res.status(400).json({ error: t.error });
+  const key = slugify(t.value);
+  if (!key) return res.status(400).json({ error: 'Please use letters in the name.' });
+  const st = await Stylist.findById(req.stylistId);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const catalog = await getCatalog();
+  const existing = catalog.find((c) => c.key === key || c.name.toLowerCase() === t.value.toLowerCase());
+  if (existing) { // already offered on Sheeba: just add it
+    st.services = [...new Set([...servicesOf(st), existing.key])];
+    await st.save();
+    return res.json({ added: existing.key, name: existing.name });
+  }
+  if ((st.pendingServices || []).length >= 3) return res.status(400).json({ error: 'You already have 3 services waiting for approval.' });
+  let proposal = await ServiceType.findOne({ key, status: 'PENDING' });
+  if (!proposal) {
+    proposal = await ServiceType.create({ key, name: t.value, proposedBy: st._id.toString() });
+    await notifyAllAdmins({ type: 'SERVICE_PROPOSED', title: `New service proposed: ${t.value}`, message: `by ${st.salonName || st.name}`, entityType: 'admin', entityId: proposal._id.toString(), priority: 'action_required' });
+  }
+  if (!(st.pendingServices || []).some((p) => p.proposalId === proposal._id.toString())) {
+    st.pendingServices = [...(st.pendingServices || []), { proposalId: proposal._id.toString(), name: proposal.name }];
+    await st.save();
+  }
+  res.json({ pending: true, name: proposal.name });
+});
+
 router.get('/me/apprentices', requireAuth, async (req, res) => {
   const list = await Stylist.find({ supervisorId: String(req.stylistId), role: 'APPRENTICE' }, 'name supervisorStatus createdAt');
   res.json(list.map((a) => ({ _id: a._id, name: a.name, status: a.supervisorStatus, since: a.createdAt })));

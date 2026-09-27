@@ -40,6 +40,7 @@ app.use('/api/u', require('./routes/codes'));
 app.use('/api/invites', require('./routes/invites'));
 app.use('/api/checkin', require('./routes/checkin'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/catalog', require('./routes/catalog'));
 app.use('/api', messageRoutes);
 app.use('/api', notificationRoutes);
 app.use('/api/stylists', crmRoutes);

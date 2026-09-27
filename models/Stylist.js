@@ -11,6 +11,8 @@ const StyleSchema = new mongoose.Schema({
   // mobile data (~30 KB instead of ~150 KB). Made by the app at upload time.
   photoThumb: { type: String, default: null },
   addedAt: { type: Number, default: null }, // when the service was added ("New looks")
+  serviceKey: { type: String, default: null }, // which service this menu item belongs to (lib/catalog.js)
+  styleKey: { type: String, default: null },   // which named style, if any
   colorTag: String,
   active: { type: Boolean, default: true },
   // Payment is opt-in per service, per the trust-first philosophy — every
@@ -64,6 +66,11 @@ const StylistSchema = new mongoose.Schema({
   guardianName: { type: String, default: null },
   guardianPhone: { type: String, default: null },
   guardianConsentAt: { type: Number, default: null },
+  // What this professional offers (service keys from lib/catalog.js), and any
+  // service they proposed that's waiting for admin approval (shown on their
+  // own shop in the meantime).
+  services: { type: [String], default: [] },
+  pendingServices: { type: [{ proposalId: String, name: String }], default: [] },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,

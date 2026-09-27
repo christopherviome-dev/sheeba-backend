@@ -19,6 +19,7 @@ const Request = require('../models/Request');
 const { notify } = require('./notifications');
 const { validateDue } = require('../lib/invites');
 const { setSetting } = require('../lib/settings');
+const ServiceType = require('../models/ServiceType');
 
 const router = express.Router();
 
@@ -193,6 +194,42 @@ router.post('/invite-rewards/:id/void', requireAuth, requireAdmin, async (req, r
   await r.save();
   try { await AdminAction.create({ adminId: req.stylistId, action: 'INVITE_REWARD_VOIDED', targetType: 'invite-reward', targetId: r._id.toString(), reason }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true });
+});
+
+// ---------- Proposed services ----------
+router.get('/service-proposals', requireAuth, requireAdmin, async (req, res) => {
+  const pending = await ServiceType.find({ status: 'PENDING' });
+  const out = [];
+  for (const p of pending) {
+    const shops = await Stylist.find({ 'pendingServices.proposalId': p._id.toString() }, 'name salonName');
+    out.push({ _id: p._id, name: p.name, key: p.key, createdAt: p.createdAt, shops: shops.map((x) => x.salonName || x.name) });
+  }
+  res.json(out);
+});
+
+router.post('/service-proposals/:id/:decision', requireAuth, requireAdmin, async (req, res) => {
+  const { decision } = req.params;
+  if (!['approve', 'reject'].includes(decision)) return res.status(404).json({ error: 'Not found.' });
+  let p = null;
+  try { p = await ServiceType.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!p || p.status !== 'PENDING') return res.status(404).json({ error: 'No such proposal waiting.' });
+  const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 200) : '';
+  if (decision === 'reject' && reason.length < 5) return res.status(400).json({ error: 'Give a short reason for the professional.' });
+  p.status = decision === 'approve' ? 'ACTIVE' : 'REJECTED';
+  p.decidedAt = Date.now(); p.decidedBy = req.stylistId; if (decision === 'reject') p.rejectReason = reason;
+  await p.save();
+  // Every shop waiting on it: approved → it becomes one of their services; either way it stops being pending.
+  const shops = await Stylist.find({ 'pendingServices.proposalId': p._id.toString() });
+  const { servicesOf } = require('../lib/catalog');
+  for (const st of shops) {
+    st.pendingServices = (st.pendingServices || []).filter((x) => x.proposalId !== p._id.toString());
+    if (decision === 'approve') st.services = [...new Set([...servicesOf(st), p.key])];
+    await st.save();
+    await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED',
+      title: decision === 'approve' ? `"${p.name}" is now a Sheeba service` : `"${p.name}" wasn't added as a service`, message: decision === 'approve' ? 'Customers can now find you for it.' : reason, entityType: 'shop', entityId: st._id.toString(), priority: 'normal' });
+  }
+  try { await AdminAction.create({ adminId: req.stylistId, action: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED', targetType: 'service', targetId: p._id.toString(), reason: decision === 'approve' ? p.name : `${p.name}: ${reason}` }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, status: p.status });
 });
 
 // ---------- Admin switches ----------
