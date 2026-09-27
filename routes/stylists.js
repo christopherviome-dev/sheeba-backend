@@ -236,7 +236,9 @@ router.get('/:id', async (req, res) => {
   }
   const isPubliclyVisible = st.status === 'APPROVED' && st.accountStatus === 'ACTIVE';
   if (!isPubliclyVisible && !isAdminRequest && !isOwner) return res.status(404).json({ error: 'Shop not found.' });
-  res.json(publicStylist(st, isAdminRequest || isOwner));
+  const completedJobs = await Request.countDocuments({ stylistId: st._id.toString(), status: 'completed' });
+  // Social proof for customers: loves received and jobs done on Sheeba.
+  res.json({ ...publicStylist(st), stats: { loves: (st.styles || []).reduce((t, x) => t + (x.likes || []).length, 0), completedJobs } });
 });
 
 const Request = require('../models/Request');
@@ -707,6 +709,41 @@ router.post('/me/service-proposals', requireAuth, async (req, res) => {
     await st.save();
   }
   res.json({ pending: true, name: proposal.name });
+});
+
+// Counts for the My Shop menu badges: what needs attention right now.
+router.get('/me/home-counts', requireAuth, async (req, res) => {
+  const me = String(req.stylistId);
+  const managed = (await Stylist.find({ 'staffAccess.stylistId': me }, '_id')).map((s) => s._id.toString());
+  const Conversation = require('../models/Conversation');
+  const TrainingWork = require('../models/TrainingWork');
+  const [pendingRequests, unreadMessages, workToReview, apprenticeRequests] = await Promise.all([
+    Request.countDocuments({ stylistId: { $in: [me, ...managed] }, status: 'pending' }),
+    Conversation.countDocuments({ stylistId: me, stylistUnread: true }),
+    TrainingWork.countDocuments({ supervisorId: me, status: 'PENDING' }),
+    Stylist.countDocuments({ supervisorId: me, supervisorStatus: 'PENDING' }),
+  ]);
+  res.json({ pendingRequests, unreadMessages, workToReview, apprenticeRequests });
+});
+
+// A professional's own profile numbers.
+router.get('/me/profile-stats', requireAuth, async (req, res) => {
+  const st = await Stylist.findById(req.stylistId);
+  if (!st) return res.status(404).json({ error: 'Not found.' });
+  const styles = st.styles || [];
+  const completed = await Request.find({ stylistId: st._id.toString(), status: 'completed' }, 'clientId');
+  res.json({
+    loves: styles.reduce((t, x) => t + (x.likes || []).length, 0),
+    worksPosted: styles.filter((x) => x.photo || x.photoThumb).length,
+    services: styles.filter((x) => x.active !== false).length,
+    completedJobs: completed.length,
+    customersServed: new Set(completed.map((r) => r.clientId).filter(Boolean)).size,
+    followers: (st.followers || []).length,
+    memberNumber: st.memberNumber || null,
+    founding: !!(st.memberNumber && st.memberNumber <= 1000),
+    verified: !!st.verified,
+    joinedAt: st.createdAt || null,
+  });
 });
 
 router.get('/me/apprentices', requireAuth, async (req, res) => {

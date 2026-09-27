@@ -22,6 +22,7 @@ const CustomerSchema = new mongoose.Schema({
   ageConfirmedAt: { type: Number, default: null },
   // Optional feed preferences from onboarding (never shown to professionals):
   // whose styles to show first, and up to 3 favourite styles (lib/catalog.js keys).
+  profilePhoto: { type: String, default: null }, // their own picture (checked upload)
   feedFor: { type: String, enum: ['MEN', 'WOMEN', 'BOTH', null], default: null },
   favourites: { type: [String], default: [] },
   onboardedAt: { type: Number, default: null },

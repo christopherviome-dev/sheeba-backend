@@ -128,6 +128,11 @@ router.put('/me', requireCustomerAuth, async (req, res) => {
     if (n.length < 2 || n.length > 60) return res.status(400).json({ error: 'Your name should be 2 to 60 characters.' });
     c.name = n;
   }
+  if (req.body.profilePhoto !== undefined) {
+    const ph = V.photo(req.body.profilePhoto, 'profile'); // a real uploaded image, within the size limit (null removes it)
+    if (!ph.ok) return res.status(400).json({ error: ph.error });
+    c.profilePhoto = ph.value;
+  }
   await c.save();
   res.json(publicCustomer(c));
 });
@@ -190,6 +195,19 @@ router.put('/me/preferences', requireCustomerAuth, async (req, res) => {
   c.onboardedAt = c.onboardedAt || Date.now();
   await c.save();
   res.json({ feedFor: c.feedFor, favourites: c.favourites, onboardedAt: c.onboardedAt });
+});
+
+// A customer's own profile numbers.
+router.get('/me/profile-stats', requireCustomerAuth, async (req, res) => {
+  const c = await Customer.findById(req.customerId);
+  if (!c) return res.status(404).json({ error: 'Not found.' });
+  const [completed, styles, shops] = await Promise.all([
+    Request.countDocuments({ clientId: c._id.toString(), status: 'completed' }),
+    StyleRecord.countDocuments({ customerId: c._id.toString(), $or: [{ finishedPhoto: { $ne: null } }, { notes: { $ne: null } }] }),
+    Stylist.countDocuments({ followers: c._id.toString(), status: 'APPROVED' }),
+  ]);
+  res.json({ completedServices: completed, savedStyles: styles, savedShops: shops, memberNumber: c.memberNumber || null,
+    founding: !!(c.memberNumber && c.memberNumber <= 1000), joinedAt: c.createdAt || null });
 });
 
 router.get('/me/following', requireCustomerAuth, async (req, res) => {
