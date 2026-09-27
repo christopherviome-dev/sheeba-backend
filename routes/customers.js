@@ -13,7 +13,11 @@ const Request = require('../models/Request');
 const Conversation = require('../models/Conversation');
 const { notify } = require('./notifications');
 const { phoneCandidates, checkNewPassword, toE164 } = require('../lib/passwords');
-const { uniqueCode, ensureCode } = require('../lib/codes');
+const { ensureCode } = require('../lib/codes');
+const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
+const { getSetting } = require('../lib/settings');
+const { checkAge } = require('../lib/age');
+const { notifyAllAdmins } = require('./notifications');
 const { recordInvite } = require('../lib/invites');
 const { checkCountry } = require('../lib/countries');
 const V = require('../lib/validate');
@@ -44,8 +48,16 @@ router.post('/register', async (req, res) => {
     if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
     const phoneCheck = toE164(phone, countryCheck.value);
     if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
-    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, code: await uniqueCode(Stylist, Customer), country: countryCheck.value });
+    let ageFields = {};
+    if (await getSetting('ageCheck')) {
+      const a = checkAge(req.body, { apprentice: false });
+      if (!a.ok) return res.status(400).json({ error: a.error });
+      ageFields = a.value;
+    }
+    const memberNumber = await nextMemberNumber({ Stylist, Customer });
+    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields });
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
+    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${customer.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: customer._id.toString(), priority: 'important' });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {

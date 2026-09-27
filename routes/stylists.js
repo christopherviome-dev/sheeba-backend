@@ -21,7 +21,7 @@ const router = express.Router();
 // both legitimate, existing uses. Every public-facing or anonymous-action
 // response must pass false.
 function publicStylist(s, includeSensitive = false) {
-  const obj = s.toObject ? s.toObject() : s;
+  const obj = s.toObject ? s.toObject() : { ...s }; // always a copy: never alter the stored record
   delete obj.passwordHash;
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
@@ -32,6 +32,9 @@ function publicStylist(s, includeSensitive = false) {
     delete obj.mustChangePassword;
     delete obj.invitedByType;
     delete obj.invitedById;
+    delete obj.guardianName;
+    delete obj.guardianPhone;
+    delete obj.guardianConsentAt;
     delete obj.passwordChangedAt;
   }
   return obj;

@@ -49,6 +49,8 @@ const StylistSchema = new mongoose.Schema({
   workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
   // Sheeba code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
+  memberNumber: { type: Number, default: null }, // join order; #1-1,000 are founding members (lib/members.js)
+  legacyCodes: { type: [String], default: [] }, // earlier codes, still accepted
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
   invitedById: { type: String, default: null },
   // Apprentices (professionals in training) sign up with their supervisor's
@@ -56,6 +58,12 @@ const StylistSchema = new mongoose.Schema({
   role: { type: String, enum: ['PROFESSIONAL', 'APPRENTICE'], default: 'PROFESSIONAL' },
   supervisorId: { type: String, default: null },
   supervisorStatus: { type: String, enum: ['PENDING', 'APPROVED', 'DECLINED', null], default: null },
+  // Age check (only when the admin has it switched on; see lib/age.js).
+  ageConfirmedAt: { type: Number, default: null },
+  isMinor: { type: Boolean, default: false }, // a 15-17 year old apprentice: never public, no direct bookings
+  guardianName: { type: String, default: null },
+  guardianPhone: { type: String, default: null },
+  guardianConsentAt: { type: Number, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
   color: String,
@@ -108,5 +116,7 @@ const StylistSchema = new mongoose.Schema({
     lng: { type: Number, default: null },
   },
 }, { timestamps: true });
+StylistSchema.index({ legacyCodes: 1 });
+StylistSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.models.Stylist || mongoose.model('Stylist', StylistSchema);

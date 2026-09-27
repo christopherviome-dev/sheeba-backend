@@ -11,11 +11,17 @@ const CustomerSchema = new mongoose.Schema({
   country: { type: String, default: 'GH' }, // ISO code, checked against lib/worldCountries.js
   // Sheeba code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
+  memberNumber: { type: Number, default: null }, // join order; #1-1,000 are founding members (lib/members.js)
+  legacyCodes: { type: [String], default: [] }, // earlier codes, still accepted
   invitedByType: { type: String, enum: ['stylist', 'customer', null], default: null },
   invitedById: { type: String, default: null },
   // Set when an admin issues a temporary password (see Stylist).
+  // Age check (only when the admin has it switched on; see lib/age.js).
+  ageConfirmedAt: { type: Number, default: null },
   mustChangePassword: { type: Boolean, default: false },
   passwordChangedAt: { type: Number, default: null },
 }, { timestamps: true });
+CustomerSchema.index({ legacyCodes: 1 });
+CustomerSchema.index({ memberNumber: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.models.Customer || mongoose.model('Customer', CustomerSchema);

@@ -3,7 +3,7 @@ const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const Request = require('../models/Request');
 const { requireAuth, requireCustomerAuth } = require('../middleware/auth');
-const { normalizeCode } = require('../lib/codes');
+const { normalizeCode, codeQuery } = require('../lib/codes');
 const { notify } = require('./notifications');
 
 const router = express.Router();
@@ -21,7 +21,7 @@ async function canActFor(stylistId, shopId) {
 const WINDOW = 6 * 3600 * 1000;
 async function selfCandidate(customerId, shopCode) {
   const code = normalizeCode(shopCode);
-  const shop = code ? await Stylist.findOne({ code }) : null;
+  const shop = code ? await Stylist.findOne(codeQuery(code)) : null;
   if (!shop) return { shop: null, appt: null };
   const now = Date.now();
   const mine = (await Request.find({ clientId: String(customerId) })).filter((r) => String(r.stylistId) === shop._id.toString()
@@ -53,7 +53,7 @@ router.post('/self/:code', requireCustomerAuth, async (req, res) => {
 router.get('/:code', requireAuth, async (req, res) => {
   const code = normalizeCode(req.params.code);
   if (!code) return res.status(404).json({ error: 'That isn\u2019t a Sheeba code.' });
-  const customer = await Customer.findOne({ code });
+  const customer = await Customer.findOne(codeQuery(code));
   if (!customer) return res.status(404).json({ error: 'That code doesn\u2019t belong to a customer.' });
   const shopIds = [String(req.stylistId)];
   try { (await Stylist.find({ 'staffAccess.stylistId': String(req.stylistId) })).forEach((s) => shopIds.push(s._id.toString())); } catch (e) { /* no staff access */ }
@@ -80,7 +80,7 @@ router.post('/:requestId', requireAuth, async (req, res) => {
   try { r = await Request.findById(req.params.requestId); } catch (e) { /* bad id */ }
   if (!r) return res.status(404).json({ error: 'Appointment not found.' });
   if (!(await canActFor(req.stylistId, r.stylistId))) return res.status(403).json({ error: 'This isn\u2019t your appointment.' });
-  const customer = await Customer.findOne({ code });
+  const customer = await Customer.findOne(codeQuery(code));
   if (!customer || String(customer._id) !== String(r.clientId)) return res.status(400).json({ error: 'That code doesn\u2019t match this appointment\u2019s customer.' });
   if (r.status !== 'accepted') return res.status(400).json({ error: 'Accept the appointment first, then check them in.' });
   if (r.checkedInAt) return res.json({ ok: true, checkedInAt: r.checkedInAt, already: true });
