@@ -121,10 +121,13 @@ router.get('/me', requireCustomerAuth, async (req, res) => {
 
 // Update the one real editable profile field that currently exists.
 router.put('/me', requireCustomerAuth, async (req, res) => {
-  const { name } = req.body;
   const c = await Customer.findById(req.customerId);
   if (!c) return res.status(404).json({ error: 'Not found.' });
-  if (name !== undefined && name.trim()) c.name = name.trim();
+  if (req.body.name !== undefined) {
+    const n = typeof req.body.name === 'string' ? req.body.name.replace(/\s+/g, ' ').trim() : '';
+    if (n.length < 2 || n.length > 60) return res.status(400).json({ error: 'Your name should be 2 to 60 characters.' });
+    c.name = n;
+  }
   await c.save();
   res.json(publicCustomer(c));
 });
@@ -276,9 +279,16 @@ router.get('/me/savings-goals', requireCustomerAuth, async (req, res) => {
   res.json(list);
 });
 router.post('/me/savings-goals', requireCustomerAuth, async (req, res) => {
-  const { label, targetAmountMinor, currency, stylistId, styleId, note } = req.body;
-  if (!label || !targetAmountMinor) return res.status(400).json({ error: 'A label and target amount are required.' });
-  const goal = await SavingsGoal.create({ customerId: req.customerId, label, targetAmountMinor, currency: currency || 'GHS', stylistId: stylistId || null, styleId: styleId || null, note: note || null });
+  const label = typeof req.body.label === 'string' ? req.body.label.replace(/\s+/g, ' ').trim() : '';
+  if (label.length < 2 || label.length > 60) return res.status(400).json({ error: 'Give your goal a name (2 to 60 characters).' });
+  const amount = Number(req.body.targetAmountMinor);
+  if (!Number.isInteger(amount) || amount < 1 || amount > 100000000) return res.status(400).json({ error: 'Enter a target amount.' });
+  const { WORLD } = require('../lib/countries');
+  const knownCurrencies = new Set(Object.values(WORLD).map((w) => w[2]));
+  const currency = knownCurrencies.has(String(req.body.currency)) ? String(req.body.currency) : 'GHS';
+  if ((await SavingsGoal.countDocuments({ customerId: req.customerId })) >= 20) return res.status(400).json({ error: 'You can have up to 20 savings goals.' });
+  const clip = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+  const goal = await SavingsGoal.create({ customerId: req.customerId, label, targetAmountMinor: amount, currency, stylistId: clip(req.body.stylistId, 40), styleId: clip(req.body.styleId, 40), note: clip(req.body.note, 300) });
   res.json(goal);
 });
 router.delete('/me/savings-goals/:id', requireCustomerAuth, async (req, res) => {

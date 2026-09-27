@@ -15,14 +15,17 @@ function makeReferralCode() {
 
 // Create a named, shareable referral/campaign link.
 router.post('/me/referrals', requireAuth, async (req, res) => {
-  const { label, channel } = req.body;
-  if (!label) return res.status(400).json({ error: 'Give this link a name, e.g. "WhatsApp September".' });
+  const label = typeof req.body.label === 'string' ? req.body.label.replace(/\s+/g, ' ').trim() : '';
+  if (!label || label.length > 60) return res.status(400).json({ error: 'Give this link a name (up to 60 characters), e.g. "WhatsApp September".' });
+  const CHANNELS = ['WHATSAPP', 'INSTAGRAM', 'FACEBOOK', 'BUSINESS_CARD', 'QR_POSTER', 'DIRECT_LINK', 'OTHER'];
+  const channel = CHANNELS.includes(req.body.channel) ? req.body.channel : 'OTHER';
+  if ((await Referral.countDocuments({ stylistId: req.stylistId })) >= 50) return res.status(400).json({ error: 'You can have up to 50 links.' });
   let code;
   for (let i = 0; i < 5; i++) {
     code = makeReferralCode();
     if (!(await Referral.exists({ code }))) break;
   }
-  const r = await Referral.create({ code, stylistId: req.stylistId, label, channel: channel || 'OTHER' });
+  const r = await Referral.create({ code, stylistId: req.stylistId, label, channel });
   res.json(r);
 });
 

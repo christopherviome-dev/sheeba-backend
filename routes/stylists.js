@@ -38,6 +38,15 @@ function publicStylist(s, includeSensitive = false) {
     delete obj.guardianPhone;
     delete obj.guardianConsentAt;
     delete obj.passwordChangedAt;
+    // Never public: who is the admin, who is a minor, staff lists, restriction
+    // details, verification dates and document types.
+    for (const k of ['isAdmin', 'isMinor', 'staffAccess', 'restrictionReason', 'restrictedAt', 'restrictedBy', 'restoredAt',
+      'supervisorId', 'ageConfirmedAt', 'idType', 'verificationSubmittedAt', 'verificationReviewedAt']) delete obj[k];
+    // Public locations are rounded to about 1 km: enough for "near me" and
+    // distances, never someone's front door (many professionals work from home).
+    if (obj.location && typeof obj.location.lat === 'number' && typeof obj.location.lng === 'number') {
+      obj.location = { ...obj.location, lat: Math.round(obj.location.lat * 100) / 100, lng: Math.round(obj.location.lng * 100) / 100 };
+    }
   }
   return obj;
 }
@@ -83,6 +92,16 @@ router.get('/', async (req, res) => {
 const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
 const { accountFromRequest } = require('../lib/invites');
 const { phoneCandidates } = require('../lib/passwords');
+const attempts = require('../lib/attempts');
+// Anonymous follows, likes and visits feed popularity and ranking, so floods
+// from one address are capped. Generous (300 per 15 minutes) because many
+// phones on Ghana's mobile networks share one internet address.
+function engagementFlood(req, res) {
+  const k = `engage:${req.ip || 'unknown'}`;
+  if (attempts.status([k]).blocked) { res.status(429).json({ error: 'Too many actions from this network. Please try again later.' }); return true; }
+  attempts.fail([[k, 300]]);
+  return false;
+}
 
 router.get('/discover', async (req, res) => {
   // Shops in one country at a time, so prices share a currency and "near" means near.
@@ -546,7 +565,9 @@ router.post('/:id/restore', requireAuth, requireAdmin, async (req, res) => {
 // clicking around repeatedly does not inflate the count — this stays a
 // genuine "how many distinct visits" signal, not a click counter.
 router.post('/:id/visit', async (req, res) => {
-  const { clientId, ref } = req.body;
+  if (engagementFlood(req, res)) return;
+  const { ref } = req.body;
+  const clientId = typeof req.body.clientId === 'string' ? req.body.clientId.slice(0, 100) : null; // an anonymous browser id, length-limited
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
@@ -597,6 +618,7 @@ router.get('/:id/stats', requireAuth, async (req, res) => {
 });
 
 router.post('/:id/follow', async (req, res) => {
+  if (engagementFlood(req, res)) return;
   const { clientId } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
   // Following as a real customer account needs that customer's own login;
@@ -622,6 +644,7 @@ router.post('/:id/follow', async (req, res) => {
 
 // Public: like/unlike a style
 router.post('/:id/styles/:styleId/like', async (req, res) => {
+  if (engagementFlood(req, res)) return;
   const { clientId } = req.body;
   if (!clientId) return res.status(400).json({ error: 'Missing clientId.' });
   const st = await Stylist.findById(req.params.id);

@@ -8,6 +8,7 @@ const { notify } = require('./notifications');
 const Conversation = require('../models/Conversation');
 const Customer = require('../models/Customer');
 const { markInviteEarned } = require('../lib/invites');
+const attempts = require('../lib/attempts');
 const StyleRecord = require('../models/StyleRecord');
 const Referral = require('../models/Referral');
 const Stylist = require('../models/Stylist');
@@ -103,6 +104,13 @@ router.post('/', async (req, res) => {
     if (clientId) {
       let isRealCustomer = false;
       try { isRealCustomer = !!(await Customer.exists({ _id: clientId })); } catch (e) { /* anonymous browser id */ }
+      if (!isRealCustomer) {
+        // Requests without an account (the older site): capped per address so
+        // nobody can flood a shop with fake bookings.
+        const k = `anonreq:${req.ip || 'unknown'}`;
+        if (attempts.status([k]).blocked) return res.status(429).json({ error: 'Too many requests from this network. Please try again later, or create an account.' });
+        attempts.fail([[k, 20]]);
+      }
       if (isRealCustomer) {
         const actor = identifyActor(req);
         if (!actor || actor.type !== 'customer' || actor.id !== clientId) {
