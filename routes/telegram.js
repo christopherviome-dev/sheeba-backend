@@ -1,6 +1,6 @@
 const express = require('express');
 const CommunityFeedback = require('../models/CommunityFeedback');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 const { notifyAllAdmins } = require('./notifications');
 
 const router = express.Router();
@@ -34,12 +34,12 @@ router.post('/webhook', async (req, res) => {
 });
 
 // Admin: real, stored community feedback — nothing fabricated.
-router.get('/feedback', requireAuth, requireAdmin, async (req, res) => {
+router.get('/feedback', requireAuth, requirePermission('telegram'), async (req, res) => {
   const list = await CommunityFeedback.find({}).sort({ createdAt: -1 }).limit(200);
   res.json(list);
 });
 
-router.put('/feedback/:id/handled', requireAuth, requireAdmin, async (req, res) => {
+router.put('/feedback/:id/handled', requireAuth, requirePermission('telegram'), async (req, res) => {
   const f = await CommunityFeedback.findByIdAndUpdate(req.params.id, { handled: true }, { new: true });
   if (!f) return res.status(404).json({ error: 'Not found.' });
   res.json(f);

@@ -1,7 +1,8 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const Stylist = require('../models/Stylist');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
+const { requestRole, roleById, can } = require('../lib/adminRoles');
 const Activity = require('../models/Activity');
 const Referral = require('../models/Referral');
 const AdminAction = require('../models/AdminAction');
@@ -55,23 +56,18 @@ function uid(prefix) { return prefix + '_' + Math.random().toString(36).slice(2,
 // Reads an optional JWT without requiring one — used only to decide whether
 // this request gets the admin's full view or the public APPROVED-only view.
 // Never throws; an invalid/missing token just means "treat as public."
-function tryGetAdminFlag(req) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return false;
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    return !!payload.isAdmin;
-  } catch (e) {
-    return false;
-  }
+// Whether this request may see every shop (including ones not yet live) and
+// their private details: Verifiers and super admins, checked in the database.
+async function tryGetAdminFlag(req) {
+  const role = await requestRole(req);
+  return can(role, 'ids') || can(role, 'shops');
 }
 
 // Public: browse shops. Only APPROVED shops are visible to normal visitors;
 // an admin's own request (valid admin JWT) sees every shop, including
 // UNDER_REVIEW ones, so nothing can go silently unreviewed.
 router.get('/', async (req, res) => {
-  const isAdminRequest = tryGetAdminFlag(req);
+  const isAdminRequest = await tryGetAdminFlag(req);
   const filter = isAdminRequest ? {} : { status: 'APPROVED', accountStatus: 'ACTIVE' };
   const list = await Stylist.find(filter);
   // NOTE: deliberately NOT `list.map(publicStylist)` — Array.map passes the
@@ -157,7 +153,7 @@ function expandQuery(q) {
 const { distanceKm } = require('../lib/geo'); // shared: also used for local price ranges
 
 router.get('/search', async (req, res) => {
-  const isAdminRequest = tryGetAdminFlag(req);
+  const isAdminRequest = await tryGetAdminFlag(req);
   const q = (req.query.q || '').trim().toLowerCase();
   const category = req.query.category;
   const area = req.query.area;
@@ -202,7 +198,7 @@ router.get('/managed-by-me', requireAuth, async (req, res) => {
 // Public: single work item lookup, for a direct/shared link to one style —
 // only ever from an approved (or, for the owner/admin, any) shop.
 router.get('/styles/:styleId', async (req, res) => {
-  const isAdminRequest = tryGetAdminFlag(req);
+  const isAdminRequest = await tryGetAdminFlag(req);
   const filter = isAdminRequest ? {} : { status: 'APPROVED', accountStatus: 'ACTIVE' };
   const st = await Stylist.findOne({ ...filter, 'styles.id': req.params.styleId });
   if (!st) return res.status(404).json({ error: 'Style not found.' });
@@ -227,7 +223,7 @@ router.get('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Shop not found.' });
   }
   if (!st) return res.status(404).json({ error: 'Shop not found.' });
-  const isAdminRequest = tryGetAdminFlag(req);
+  const isAdminRequest = await tryGetAdminFlag(req);
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   let isOwner = false;
@@ -472,7 +468,7 @@ router.post('/me/verify', requireAuth, async (req, res) => {
 // NOTE: this is a DIFFERENT concept from shop-listing approval below —
 // a stylist can be ID-verified without their shop being publicly approved,
 // and vice versa. Do not merge these two routes.
-router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/approve', requireAuth, requirePermission('ids'), async (req, res) => {
   try {
     let st;
     try { st = await Stylist.findById(req.params.id); } catch (e) { return res.status(404).json({ error: 'Account not found.' }); }
@@ -500,7 +496,7 @@ router.post('/:id/approve', requireAuth, requireAdmin, async (req, res) => {
 // Admin: reject a verification submission. A reason is mandatory: it is
 // shown to the stylist so they know exactly what to fix, and it is kept in
 // the audit log so every decision can be explained later.
-router.post('/:id/reject-verification', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/reject-verification', requireAuth, requirePermission('ids'), async (req, res) => {
   try {
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
     if (reason.length < 5) return res.status(400).json({ error: 'Give a clear reason so the stylist knows what to fix.' });
@@ -522,7 +518,7 @@ router.post('/:id/reject-verification', requireAuth, requireAdmin, async (req, r
 });
 
 // Admin: approve a shop for public Discovery listing (the UNDER_REVIEW gate).
-router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/approve-review', requireAuth, requirePermission('shops'), async (req, res) => {
   const st = await Stylist.findByIdAndUpdate(req.params.id, { status: 'APPROVED' }, { new: true });
   if (!st) return res.status(404).json({ error: 'Not found.' });
   try { await Activity.create({ stylistId: st._id.toString(), type: 'SHOP_APPROVED' }); } catch (e) { /* non-fatal */ }
@@ -534,7 +530,7 @@ router.post('/:id/approve-review', requireAuth, requireAdmin, async (req, res) =
 // Admin: restrict an account. Never a silent action — reason is required,
 // and it's both stored on the account AND recorded permanently in the
 // audit log, so a restriction can always be explained later.
-router.post('/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/restrict', requireAuth, requirePermission('restrict'), async (req, res) => {
   const { accountStatus, reason } = req.body;
   if (!['RESTRICTED', 'SUSPENDED', 'BANNED', 'DEACTIVATED'].includes(accountStatus)) return res.status(400).json({ error: 'Invalid account status.' });
   const why = typeof reason === 'string' ? reason.trim().slice(0, 300) : '';
@@ -551,7 +547,7 @@ router.post('/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
   res.json(publicStylist(st, true));
 });
 
-router.post('/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+router.post('/:id/restore', requireAuth, requirePermission('restrict'), async (req, res) => {
   let st = null;
   try { st = await Stylist.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now(), restrictionReason: null }, { new: true }); } catch (e) { /* bad id */ }
   if (!st) return res.status(404).json({ error: 'Not found.' });
@@ -604,7 +600,7 @@ router.post('/:id/visit', async (req, res) => {
 // shop. "visitedNotFollowed" is a genuine set-difference: distinct visitors
 // minus the shop's actual followers list, not an estimate.
 router.get('/:id/stats', requireAuth, async (req, res) => {
-  if (!req.isAdmin && req.stylistId !== req.params.id) return res.status(403).json({ error: 'Not authorized.' });
+  if (req.stylistId !== req.params.id && !can(await roleById(req.stylistId), 'analytics')) return res.status(403).json({ error: 'Not authorized.' });
   const st = await Stylist.findById(req.params.id);
   if (!st) return res.status(404).json({ error: 'Not found.' });
   const visits = await Activity.find({ stylistId: st._id.toString(), type: 'SHOP_VISITED' });

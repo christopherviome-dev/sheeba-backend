@@ -4,7 +4,7 @@ const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const Request = require('../models/Request');
 const AdminAction = require('../models/AdminAction');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 const { notifyAllAdmins } = require('./notifications');
 const { accountFromRequest } = require('../lib/invites');
 const attempts = require('../lib/attempts');
@@ -61,7 +61,7 @@ router.post('/', async (req, res) => {
 });
 
 // Admin: all reports, with the names behind the IDs so they can be acted on.
-router.get('/', requireAuth, requireAdmin, async (req, res) => {
+router.get('/', requireAuth, requirePermission('reports'), async (req, res) => {
   const list = await Report.find({}).sort({ createdAt: -1 });
   const out = [];
   for (const r of list) {
@@ -81,14 +81,14 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Kept exactly as-is for the older site.
-router.put('/:id/resolve', requireAuth, requireAdmin, async (req, res) => {
+router.put('/:id/resolve', requireAuth, requirePermission('reports'), async (req, res) => {
   const r = await Report.findByIdAndUpdate(req.params.id, { resolved: true, state: 'RESOLVED' }, { new: true });
   try { await AdminAction.create({ adminId: req.stylistId, action: 'REPORT_RESOLVED', targetType: 'report', targetId: req.params.id }); } catch (e) { /* non-fatal */ }
   res.json(r);
 });
 
 // The case workflow: move a report through its states, with a private note.
-router.put('/:id/state', requireAuth, requireAdmin, async (req, res) => {
+router.put('/:id/state', requireAuth, requirePermission('reports'), async (req, res) => {
   const { state } = req.body;
   const valid = ['OPEN', 'UNDER_REVIEW', 'NEEDS_INFORMATION', 'ESCALATED', 'RESOLVED', 'DISMISSED'];
   if (!valid.includes(state)) return res.status(400).json({ error: 'Invalid state.' });

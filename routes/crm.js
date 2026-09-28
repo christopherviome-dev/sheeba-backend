@@ -17,7 +17,7 @@ function makeReferralCode() {
 router.post('/me/referrals', requireAuth, async (req, res) => {
   const label = typeof req.body.label === 'string' ? req.body.label.replace(/\s+/g, ' ').trim() : '';
   if (!label || label.length > 60) return res.status(400).json({ error: 'Give this link a name (up to 60 characters), e.g. "WhatsApp September".' });
-  const CHANNELS = ['WHATSAPP', 'INSTAGRAM', 'FACEBOOK', 'BUSINESS_CARD', 'QR_POSTER', 'DIRECT_LINK', 'OTHER'];
+  const CHANNELS = ['WHATSAPP', 'INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'BUSINESS_CARD', 'QR_POSTER', 'DIRECT_LINK', 'OTHER'];
   const channel = CHANNELS.includes(req.body.channel) ? req.body.channel : 'OTHER';
   if ((await Referral.countDocuments({ stylistId: req.stylistId })) >= 50) return res.status(400).json({ error: 'You can have up to 50 links.' });
   let code;

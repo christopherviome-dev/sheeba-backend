@@ -15,6 +15,7 @@ const { normalizeCode, codeQuery } = require('../lib/codes');
 const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
 const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
+const { resolveSource } = require('../lib/source');
 // Compared against when no account matches, so a wrong number takes as long
 // as a wrong password: a genuine hash of random text, made fresh at startup.
 const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
@@ -66,7 +67,9 @@ router.post('/register', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'An account with this phone number already exists.' });
     const memberNumber = await nextMemberNumber({ Stylist, Customer });
     const passwordHash = await bcrypt.hash(password, 10);
+    const signupSource = await resolveSource(req.body.source); // where they came from (lib/source.js)
     const stylist = await Stylist.create({
+      signupSource,
       phone: phoneCheck.value, passwordHash, name,
       memberNumber, code: friendlyCode(name, memberNumber),
       country, currency: getCountry(country).currency, // a shop prices in its own country's currency

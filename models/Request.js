@@ -12,7 +12,10 @@ const RequestSchema = new mongoose.Schema({
   currencySnapshot: { type: String, default: 'GHS' }, // captured at creation — never recalculated later
   checkedInAt: { type: Number, default: null }, // set when the customer is checked in (QR)
   checkedInBy: { type: String, enum: ['professional', 'customer', null], default: null },
-  completedAt: { type: Number, default: null }, // when it was marked completed (earnings use this, not 'last updated')
+  completedAt: { type: Number, default: null },
+  source: { type: mongoose.Schema.Types.Mixed, default: null }, // where the booking came from (lib/source.js)
+  servedBy: { type: String, default: null },      // who actually did the service (owner or a helper)
+  servedByName: { type: String, default: null }, // when it was marked completed (earnings use this, not 'last updated')
   clientId: String,
   clientName: String,
   clientPhone: String,

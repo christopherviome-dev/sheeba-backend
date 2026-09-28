@@ -1,3 +1,4 @@
+const { roleById, can } = require('../lib/adminRoles');
 const express = require('express');
 const crypto = require('crypto');
 const Payment = require('../models/Payment');
@@ -116,7 +117,7 @@ router.get('/:id', async (req, res) => {
   const actor = identifyActor(req);
   const payment = await Payment.findById(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Not found.' });
-  const authorized = actor && ((actor.type === 'customer' && payment.customerId === actor.id) || (actor.type === 'stylist' && (payment.stylistId === actor.id || actor.isAdmin)));
+  const authorized = actor && ((actor.type === 'customer' && payment.customerId === actor.id) || (actor.type === 'stylist' && (payment.stylistId === actor.id || can(await roleById(actor.id), '*'))));
   if (!authorized) return res.status(403).json({ error: 'Not authorized.' });
   res.json(payment);
 });
@@ -132,7 +133,7 @@ router.get('/', async (req, res) => {
 router.post('/:id/refund', requireAuth, async (req, res) => {
   const payment = await Payment.findById(req.params.id);
   if (!payment) return res.status(404).json({ error: 'Not found.' });
-  if (payment.stylistId !== req.stylistId && !req.isAdmin) return res.status(403).json({ error: 'Not authorized.' });
+  if (payment.stylistId !== req.stylistId && !can(await roleById(req.stylistId), '*')) return res.status(403).json({ error: 'Not authorized.' });
   if (payment.status !== 'SUCCESSFUL' && payment.status !== 'PARTIALLY_REFUNDED') return res.status(400).json({ error: 'Only a successful payment can be refunded.' });
   const { amountMinor } = req.body; // omit for full refund
   try {

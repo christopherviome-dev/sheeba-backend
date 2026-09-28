@@ -6,6 +6,7 @@ const Stylist = require('../models/Stylist');
 const Customer = require('../models/Customer');
 const { requireAuth, requireCustomerAuth } = require('../middleware/auth');
 const V = require('../lib/validate');
+const { roleById, can } = require('../lib/adminRoles');
 const attempts = require('../lib/attempts');
 const findConv = async (id) => { try { return await Conversation.findById(id); } catch (e) { return null; } }; // bad ids → clean 404
 
@@ -22,7 +23,7 @@ function identifyActor(req) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     if (payload.role === 'customer') return { type: 'customer', id: payload.id };
-    return { type: 'stylist', id: payload.id, isAdmin: !!payload.isAdmin };
+    return { type: 'stylist', id: payload.id };
   } catch (e) {
     return null;
   }
@@ -30,7 +31,7 @@ function identifyActor(req) {
 
 function isParticipant(actor, conv) {
   if (!actor) return false;
-  if (actor.type === 'stylist' && actor.isAdmin) return true; // admin can view for moderation/support
+  if (actor.type === 'stylist' && actor.canModerate) return true; // Moderators (and super admins) can view, for reports; set live per request
   if (actor.type === 'customer') return conv.customerId === actor.id;
   if (actor.type === 'stylist') return conv.stylistId === actor.id;
   return false;
@@ -78,6 +79,7 @@ router.get('/conversations/stylist', requireAuth, async (req, res) => {
 
 router.get('/conversations/:id', async (req, res) => {
   const actor = identifyActor(req);
+  if (actor && actor.type === 'stylist') actor.canModerate = can(await roleById(actor.id), 'conversations'); // from the database, not the token
   const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   if (!isParticipant(actor, conv)) return res.status(403).json({ error: 'Not authorized.' });
@@ -86,6 +88,7 @@ router.get('/conversations/:id', async (req, res) => {
 
 router.get('/conversations/:id/messages', async (req, res) => {
   const actor = identifyActor(req);
+  if (actor && actor.type === 'stylist') actor.canModerate = can(await roleById(actor.id), 'conversations'); // from the database, not the token
   const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });
   if (!isParticipant(actor, conv)) return res.status(403).json({ error: 'Not authorized.' });

@@ -56,7 +56,11 @@ module.exports.notify = async function notify({ recipientId, recipientType, type
 module.exports.notifyAllAdmins = async function notifyAllAdmins(fields) {
   const Stylist = require('../models/Stylist');
   try {
-    const admins = await Stylist.find({ isAdmin: true }, '_id');
+    // Only the admins whose role handles this kind of alert (super admins get everything).
+    const { roleOf, can, NOTIFY_PERM } = require('../lib/adminRoles');
+    const perm = NOTIFY_PERM[fields.type] || '*';
+    const admins = (await Stylist.find({ $or: [{ isAdmin: true }, { adminRole: { $ne: null } }] }, '_id adminRole isAdmin accountStatus'))
+      .filter((a) => { const r = roleOf(a); return r && (perm === '*' ? r === 'SUPER_ADMIN' : can(r, perm)); });
     await Promise.all(admins.map(a => module.exports.notify({ ...fields, recipientId: a._id.toString(), recipientType: 'stylist' })));
   } catch (e) { /* non-fatal */ }
 };

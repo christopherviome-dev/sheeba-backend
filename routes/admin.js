@@ -1,7 +1,7 @@
 const express = require('express');
 const AdminAction = require('../models/AdminAction');
 const Stylist = require('../models/Stylist');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requirePermission } = require('../middleware/auth');
 const { normalizeGhanaCard, normalizeIdNumber, compareNames } = require('../lib/identity');
 const { getCountry, countryOf } = require('../lib/countries');
 // One key per real document, whatever its type, for duplicate detection.
@@ -23,16 +23,75 @@ const ServiceType = require('../models/ServiceType');
 
 const router = express.Router();
 
-router.get('/audit', requireAuth, requireAdmin, async (req, res) => {
+// The audit log, with WHO did each action (now that there's an admin team).
+router.get('/audit', requireAuth, requirePermission('audit'), async (req, res) => {
   const list = await AdminAction.find({}).sort({ createdAt: -1 }).limit(200);
-  res.json(list);
+  const names = {};
+  for (const id of [...new Set(list.map((a) => a.adminId).filter(Boolean))]) {
+    try { const s = await Stylist.findById(id, 'name'); names[id] = s ? s.name : null; } catch (e) { /* bad id */ }
+  }
+  res.json(list.map((a) => ({ ...(a.toObject ? a.toObject() : a), adminName: names[a.adminId] || null })));
+});
+
+// ---------- The admin team (super admins only) ----------
+const { ROLES, roleOf } = require('../lib/adminRoles');
+const { phoneCandidates } = require('../lib/passwords');
+const adminFilter = { $or: [{ isAdmin: true }, { adminRole: { $ne: null } }] };
+async function superAdminCount() {
+  return (await Stylist.find(adminFilter, 'adminRole isAdmin accountStatus')).filter((s) => roleOf(s) === 'SUPER_ADMIN').length;
+}
+
+router.get('/team', requireAuth, requirePermission('team'), async (req, res) => {
+  const list = await Stylist.find(adminFilter, 'name salonName phone adminRole isAdmin accountStatus profilePhoto');
+  res.json({
+    roles: Object.entries(ROLES).map(([key, r]) => ({ key, label: r.label, perms: r.perms })),
+    team: list.map((s) => ({ id: s._id, name: s.name, shop: s.salonName || null, phone: s.phone, photo: s.profilePhoto || null, role: roleOf(s), you: s._id.toString() === String(req.stylistId) }))
+      .filter((m) => m.role),
+  });
+});
+
+// Give someone a role (they need their own Sheeba professional account).
+router.post('/team', requireAuth, requirePermission('team'), async (req, res) => {
+  const role = req.body.role;
+  if (!ROLES[role]) return res.status(400).json({ error: 'Choose a role.' });
+  if (!req.body.phone) return res.status(400).json({ error: 'Enter the phone number of their Sheeba account.' });
+  const person = await Stylist.findOne({ phone: { $in: phoneCandidates(req.body.phone) } });
+  if (!person) return res.status(404).json({ error: 'No Sheeba professional account uses that number. They need to create one first.' });
+  if ((person.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(400).json({ error: 'That account is restricted.' });
+  if (roleOf(person)) return res.status(400).json({ error: `${person.name} is already on the admin team. Change their role instead.` });
+  person.adminRole = role;
+  await person.save();
+  await notify({ recipientId: person._id.toString(), recipientType: 'stylist', type: 'ADMIN_ROLE', title: `You've joined the Sheeba admin team as ${ROLES[role].label}`, message: 'Open Admin from the menu to get started.', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'ADMIN_ROLE_GIVEN', targetType: 'stylist', targetId: person._id.toString(), meta: { role } }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, name: person.name, role });
+});
+
+// Change someone's role, or remove them (role: null). The last super admin can
+// never be removed or demoted, so the owner can't be locked out.
+router.put('/team/:id', requireAuth, requirePermission('team'), async (req, res) => {
+  const role = req.body.role === null ? null : req.body.role;
+  if (role !== null && !ROLES[role]) return res.status(400).json({ error: 'Unknown role.' });
+  let person = null;
+  try { person = await Stylist.findById(req.params.id); } catch (e) { /* bad id */ }
+  const current = roleOf(person);
+  if (!person || !current) return res.status(404).json({ error: 'Not on the admin team.' });
+  if (current === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN' && (await superAdminCount()) <= 1) {
+    return res.status(400).json({ error: 'There must always be at least one super admin.' });
+  }
+  person.adminRole = role;
+  if (role !== 'SUPER_ADMIN') person.isAdmin = false; // the older admin flag must not keep full access
+  await person.save();
+  await notify({ recipientId: person._id.toString(), recipientType: 'stylist', type: 'ADMIN_ROLE',
+    title: role ? `Your admin role is now ${ROLES[role].label}` : 'You are no longer on the Sheeba admin team', message: '', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
+  try { await AdminAction.create({ adminId: req.stylistId, action: role ? 'ADMIN_ROLE_CHANGED' : 'ADMIN_ROLE_REMOVED', targetType: 'stylist', targetId: person._id.toString(), meta: { from: current, to: role } }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, role });
 });
 
 // Admin-only ID verification queue. Each submission comes with two
 // automatic signals to help the human reviewer, never to replace them:
 //  - nameCheck: typed legal name vs the name the account registered with
 //  - duplicateAccounts: other accounts that submitted the same card number
-router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
+router.get('/verifications', requireAuth, requirePermission('ids'), async (req, res) => {
   try {
     const pending = await Stylist.find({ pendingReview: true }).sort({ verificationSubmittedAt: 1 });
     // At today's scale, comparing in memory is fine and also catches card
@@ -81,7 +140,7 @@ router.get('/verifications', requireAuth, requireAdmin, async (req, res) => {
 // Open "Forgot password?" requests, with the account's own name and the
 // phone number STORED ON THE ACCOUNT. The admin calls that number (never a
 // number supplied some other way) to confirm identity before issuing.
-router.get('/password-resets', requireAuth, requireAdmin, async (req, res) => {
+router.get('/password-resets', requireAuth, requirePermission('passwords'), async (req, res) => {
   const open = await PasswordResetRequest.find({ status: 'OPEN' }).sort({ createdAt: 1 });
   const items = await Promise.all(open.map(async (r) => {
     const Model = r.accountType === 'customer' ? Customer : Stylist;
@@ -102,7 +161,7 @@ async function loadOpenRequest(id) {
 // Issue a temporary password. It is returned ONCE, in this response, for the
 // admin to read out over the phone; only its scrambled form is stored, and
 // the audit log records that a reset happened, never the password itself.
-router.post('/password-resets/:id/issue', requireAuth, requireAdmin, async (req, res) => {
+router.post('/password-resets/:id/issue', requireAuth, requirePermission('passwords'), async (req, res) => {
   const r = await loadOpenRequest(req.params.id);
   if (!r) return res.status(404).json({ error: 'This request is no longer open.' });
   const Model = r.accountType === 'customer' ? Customer : Stylist;
@@ -119,7 +178,7 @@ router.post('/password-resets/:id/issue', requireAuth, requireAdmin, async (req,
   res.json({ tempPassword, name: acc.salonName || acc.name, phone: acc.phone });
 });
 
-router.post('/password-resets/:id/dismiss', requireAuth, requireAdmin, async (req, res) => {
+router.post('/password-resets/:id/dismiss', requireAuth, requirePermission('passwords'), async (req, res) => {
   const r = await loadOpenRequest(req.params.id);
   if (!r) return res.status(404).json({ error: 'This request is no longer open.' });
   r.status = 'DISMISSED'; r.resolvedAt = Date.now(); r.resolvedBy = req.stylistId;
@@ -131,7 +190,7 @@ router.post('/password-resets/:id/dismiss', requireAuth, requireAdmin, async (re
 // ---------- Invite rewards ----------
 // Earned-but-unpaid rewards, grouped by the person to pay. Each shows the job
 // that qualified it, so the admin can check it's genuine before paying by hand.
-router.get('/invite-rewards', requireAuth, requireAdmin, async (req, res) => {
+router.get('/invite-rewards', requireAuth, requirePermission('invites'), async (req, res) => {
   await validateDue();
   // Default view: the ones that need a human decision.
   const VIEWS = { UNDER_REVIEW: ['UNDER_REVIEW'], CHECKING: ['CHECKING', 'EARNED'], VALIDATED: ['VALIDATED', 'PAID'], VOID: ['VOID'], JOINED: ['JOINED'] };
@@ -170,7 +229,7 @@ router.get('/invite-rewards', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Confirm a reward the admin has checked (from "under review" or "checking").
-router.post('/invite-rewards/:id/validate', requireAuth, requireAdmin, async (req, res) => {
+router.post('/invite-rewards/:id/validate', requireAuth, requirePermission('invites'), async (req, res) => {
   let r = null;
   try { r = await InviteReward.findById(req.params.id); } catch (e) { /* bad id */ }
   if (!r) return res.status(404).json({ error: 'Reward not found.' });
@@ -182,7 +241,7 @@ router.post('/invite-rewards/:id/validate', requireAuth, requireAdmin, async (re
 });
 
 // Void a reward that isn't genuine (a reason is required and kept).
-router.post('/invite-rewards/:id/void', requireAuth, requireAdmin, async (req, res) => {
+router.post('/invite-rewards/:id/void', requireAuth, requirePermission('invites'), async (req, res) => {
   const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
   if (reason.length < 5) return res.status(400).json({ error: 'Give a clear reason.' });
   let r = null;
@@ -198,7 +257,7 @@ router.post('/invite-rewards/:id/void', requireAuth, requireAdmin, async (req, r
 
 // ---------- Customer restrictions ----------
 // RESTRICTED: can log in but can't book. SUSPENDED / BANNED: can't log in.
-router.post('/customers/:id/restrict', requireAuth, requireAdmin, async (req, res) => {
+router.post('/customers/:id/restrict', requireAuth, requirePermission('restrict'), async (req, res) => {
   const { accountStatus } = req.body;
   if (!['RESTRICTED', 'SUSPENDED', 'BANNED'].includes(accountStatus)) return res.status(400).json({ error: 'Invalid account status.' });
   const why = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 300) : '';
@@ -211,7 +270,7 @@ router.post('/customers/:id/restrict', requireAuth, requireAdmin, async (req, re
   res.json({ ok: true, accountStatus: c.accountStatus });
 });
 
-router.post('/customers/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+router.post('/customers/:id/restore', requireAuth, requirePermission('restrict'), async (req, res) => {
   let c = null;
   try { c = await Customer.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now(), restrictionReason: null }, { new: true }); } catch (e) { /* bad id */ }
   if (!c) return res.status(404).json({ error: 'Not found.' });
@@ -221,7 +280,7 @@ router.post('/customers/:id/restore', requireAuth, requireAdmin, async (req, res
 });
 
 // ---------- Proposed services ----------
-router.get('/service-proposals', requireAuth, requireAdmin, async (req, res) => {
+router.get('/service-proposals', requireAuth, requirePermission('services'), async (req, res) => {
   const pending = await ServiceType.find({ status: 'PENDING' });
   const out = [];
   for (const p of pending) {
@@ -231,7 +290,7 @@ router.get('/service-proposals', requireAuth, requireAdmin, async (req, res) => 
   res.json(out);
 });
 
-router.post('/service-proposals/:id/:decision', requireAuth, requireAdmin, async (req, res) => {
+router.post('/service-proposals/:id/:decision', requireAuth, requirePermission('services'), async (req, res) => {
   const { decision } = req.params;
   if (!['approve', 'reject'].includes(decision)) return res.status(404).json({ error: 'Not found.' });
   let p = null;
@@ -258,7 +317,7 @@ router.post('/service-proposals/:id/:decision', requireAuth, requireAdmin, async
 
 // ---------- Admin switches ----------
 const SWITCHES = { ageCheck: 'boolean' };
-router.put('/settings/:key', requireAuth, requireAdmin, async (req, res) => {
+router.put('/settings/:key', requireAuth, requirePermission('switches'), async (req, res) => {
   const { key } = req.params;
   if (!SWITCHES[key]) return res.status(404).json({ error: 'Unknown setting.' });
   if (typeof req.body.value !== 'boolean') return res.status(400).json({ error: 'Choose on or off.' });

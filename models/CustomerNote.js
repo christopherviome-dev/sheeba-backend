@@ -6,6 +6,8 @@ const mongoose = require('mongoose');
 const CustomerNoteSchema = new mongoose.Schema({
   stylistId: { type: String, required: true },
   customerId: { type: String, required: true },
+  authorId: { type: String, default: null },   // who wrote it (the owner or a helper); the note belongs to the shop
+  authorName: { type: String, default: null },
   note: { type: String, required: true },
   createdAt: { type: Number, default: () => Date.now() },
 });

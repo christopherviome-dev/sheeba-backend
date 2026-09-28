@@ -1,6 +1,7 @@
 const express = require('express');
 const Request = require('../models/Request');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
+const { roleById, can } = require('../lib/adminRoles');
 const { recalculateGroupPoints } = require('./stylists');
 const Activity = require('../models/Activity');
 const { postSystemMessage, identifyActor } = require('./messages');
@@ -8,7 +9,9 @@ const { notify } = require('./notifications');
 const Conversation = require('../models/Conversation');
 const Customer = require('../models/Customer');
 const { markInviteEarned } = require('../lib/invites');
+const { resolveSource } = require('../lib/source');
 const attempts = require('../lib/attempts');
+const V = require('../lib/validate');
 const StyleRecord = require('../models/StyleRecord');
 const Referral = require('../models/Referral');
 const Stylist = require('../models/Stylist');
@@ -46,35 +49,67 @@ function redact(r, fields) {
 //  - customer: full details of their own requests
 //  - anyone else: status/service information only, no personal details.
 // Previously this returned every customer's name and phone number publicly.
+// For shop helpers: the customer's phone shown as •••• ••22 (and no
+// emergency contact), unless the owner allows them to see phone numbers.
+function maskContact(r) {
+  const o = r.toObject ? r.toObject() : { ...r };
+  const digits = String(o.clientPhone || '').replace(/\D/g, '');
+  if (o.clientPhone) o.clientPhone = `•••• ••${digits.slice(-2)}`;
+  o.phoneHidden = true;
+  delete o.emergency;
+  return o;
+}
+
 router.get('/', async (req, res) => {
   try {
     const actor = identifyActor(req);
     const list = await Request.find({});
-    if (actor && actor.type === 'stylist' && actor.isAdmin) return res.json(list);
+    if (actor && actor.type === 'stylist' && can(await roleById(actor.id), '*')) return res.json(list); // super admins, checked live
     const myShops = new Set();
+    const helperOf = {}; // shops this professional helps at → what the owner allows them
     if (actor && actor.type === 'stylist') {
       myShops.add(actor.id);
-      const managed = await Stylist.find({ 'staffAccess.stylistId': actor.id }, '_id');
-      managed.forEach((s) => myShops.add(s._id.toString()));
+      const managed = await Stylist.find({ 'staffAccess.stylistId': actor.id }, '_id staffAccess');
+      managed.forEach((s) => {
+        myShops.add(s._id.toString());
+        const entry = (s.staffAccess || []).find((x) => x.stylistId === actor.id) || {};
+        helperOf[s._id.toString()] = { bookings: entry.canManageBookings !== false, phones: entry.canSeePhones === true };
+      });
     }
-    res.json(list.map((r) => {
+    const soon = Date.now() - 12 * 3600 * 1000, until = Date.now() + 36 * 3600 * 1000;
+    const out = [];
+    for (const r of list) {
       const isMineAsCustomer = actor && actor.type === 'customer' && r.clientId === actor.id;
       const isMineAsPro = actor && actor.type === 'stylist' && r.stylistId && myShops.has(r.stylistId);
-      if (isMineAsCustomer || isMineAsPro) return r;
-      if (actor && actor.type === 'stylist' && !r.stylistId && r.status === 'open') return redact(r, CONTACT_FIELDS);
-      return redact(r, [...CONTACT_FIELDS, ...DETAIL_FIELDS]);
-    }));
+      const help = isMineAsPro && helperOf[r.stylistId];
+      if (help) {
+        // A helper: without "manage all bookings", only today's chair (and jobs they did).
+        const todays = ['accepted', 'completed'].includes(r.status) && r.preferredAt >= soon && r.preferredAt <= until;
+        if (!help.bookings && !todays && r.servedBy !== actor.id) continue;
+        // Phone numbers stay hidden unless the owner allows them.
+        out.push(help.phones ? r : maskContact(r));
+        continue;
+      }
+      if (isMineAsCustomer || isMineAsPro) { out.push(r); continue; }
+      if (actor && actor.type === 'stylist' && !r.stylistId && r.status === 'open') { out.push(redact(r, CONTACT_FIELDS)); continue; }
+      out.push(redact(r, [...CONTACT_FIELDS, ...DETAIL_FIELDS]));
+    }
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: 'Could not load requests.' });
   }
 });
 
+async function nameOf(id) { try { const s = await Stylist.findById(id, 'name'); return s ? s.name : null; } catch (e) { return null; } }
 const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : undefined);
 
 // Submit a booking request to a specific professional (or an open request).
 router.post('/', async (req, res) => {
   try {
-    const { stylistId, styleId, clientId, ref } = req.body;
+    const { stylistId, styleId, clientId } = req.body;
+    const source = await resolveSource(req.body.source); // where this booking came from (lib/source.js)
+    // A marketing-link code (old field, or the booking's source) credits that link below: only if it belongs to THIS shop.
+    const ref = typeof req.body.ref === 'string' ? req.body.ref : source && source.type === 'link' ? source.code : null;
     const meet = ['provider', 'client', 'midway'].includes(req.body.meet) ? req.body.meet : null // midway = "somewhere in between";
     const emergency = clip(req.body.emergency, 120); // an emergency contact: a name and number
     const clientName = clip(req.body.clientName, 100);
@@ -139,7 +174,7 @@ router.post('/', async (req, res) => {
       if (style) { serviceNameSnapshot = style.name; priceSnapshot = style.price; durationSnapshot = style.duration; }
     }
 
-    const r = await Request.create({ stylistId, styleId, serviceNameSnapshot, priceSnapshot, durationSnapshot, currencySnapshot, clientId, clientName, clientPhone, date, preferredAt, note, meet, emergency, budget, area, status });
+    const r = await Request.create({ stylistId, styleId, serviceNameSnapshot, priceSnapshot, durationSnapshot, currencySnapshot, clientId, clientName, clientPhone, date, preferredAt, note, meet, emergency, budget, area, status, source });
     if (stylistId) {
       try { await Activity.create({ stylistId, clientId, type: 'REQUEST_CREATED', meta: { requestId: r._id.toString() } }); } catch (e) { /* non-fatal */ }
       await notify({ recipientId: stylistId, recipientType: 'stylist', type: 'REQUEST_CREATED', title: `New request from ${clientName}`, message: note ? note.slice(0, 80) : null, entityType: 'request', entityId: r._id.toString(), priority: 'action_required' });
@@ -174,6 +209,34 @@ router.post('/', async (req, res) => {
 // can't jump straight to "completed" or be completed twice.
 const TRANSITIONS = { pending: ['accepted', 'declined'], accepted: ['completed', 'declined'] };
 
+// "Fresh Look": after a job, the shop (owner or a helper) adds a photo of the
+// finished look. It goes straight into the customer's style gallery, ready
+// for them to share. Allowed for 14 days after completion.
+router.post('/:id/look', requireAuth, async (req, res) => {
+  let r = null;
+  try { r = await Request.findById(req.params.id); } catch (e) { /* bad id */ }
+  if (!r || !r.stylistId) return res.status(404).json({ error: 'Booking not found.' });
+  const me = String(req.stylistId);
+  const helper = r.stylistId !== me && await Stylist.findOne({ _id: r.stylistId, 'staffAccess.stylistId': me }, '_id');
+  if (r.stylistId !== me && !helper) return res.status(403).json({ error: 'Not your booking.' });
+  if (r.status !== 'completed') return res.status(400).json({ error: 'Add the finished look once the service is completed.' });
+  const done = r.completedAt || new Date(r.updatedAt).getTime();
+  if (Date.now() - done > 14 * 24 * 3600 * 1000) return res.status(400).json({ error: 'Finished looks can be added within 14 days of the service.' });
+  const photo = V.photo(req.body.photo, 'service');
+  if (!photo.ok || !photo.value) return res.status(400).json({ error: photo.error || 'Add a photo of the finished look.' });
+  const thumb = req.body.thumb ? V.photo(req.body.thumb, 'thumb') : { ok: true, value: null };
+  if (!thumb.ok) return res.status(400).json({ error: thumb.error });
+  const rec = await StyleRecord.findOne({ requestId: r._id.toString() });
+  if (!rec) return res.status(400).json({ error: 'This customer booked without an account, so there is no gallery to add it to.' });
+  const [by, shop] = await Promise.all([Stylist.findById(me, 'name'), Stylist.findById(r.stylistId, 'name salonName')]);
+  const shopName = shop ? shop.salonName || shop.name : 'your professional';
+  const first = !rec.proPhoto;
+  rec.proPhoto = photo.value; rec.proThumb = thumb.value; rec.proPhotoAt = Date.now(); rec.proPhotoBy = by ? by.name : null;
+  await rec.save();
+  if (first) await notifyRealCustomer(r.clientId, { type: 'FRESH_LOOK', title: `Your fresh look from ${shopName} ✨`, message: 'It\u2019s in your styles, ready to share.', entityType: 'request', entityId: r._id.toString(), priority: 'normal' });
+  res.json({ ok: true });
+});
+
 // Auth: professional (owner, authorised staff, or admin) moves a request on.
 router.put('/:id/status', requireAuth, async (req, res) => {
   try {
@@ -181,16 +244,25 @@ router.put('/:id/status', requireAuth, async (req, res) => {
   try { current = await Request.findById(req.params.id); } catch (e) { return res.status(404).json({ error: 'Request not found.' }); }
   if (!current) return res.status(404).json({ error: 'Request not found.' });
   const isOwner = current.stylistId === req.stylistId;
-  const isAuthorizedStaff = !isOwner && current.stylistId && await Stylist.exists({ _id: current.stylistId, 'staffAccess.stylistId': req.stylistId });
-  if (!isOwner && !isAuthorizedStaff && !req.isAdmin) return res.status(403).json({ error: 'Not your request.' });
+  const shopDoc = !isOwner && current.stylistId ? await Stylist.findOne({ _id: current.stylistId, 'staffAccess.stylistId': req.stylistId }, 'staffAccess') : null;
+  const isAuthorizedStaff = !!shopDoc;
+  if (!isOwner && !isAuthorizedStaff && !can(await roleById(req.stylistId), '*')) return res.status(403).json({ error: 'Not your request.' });
   const next = req.body.status;
+  if (isAuthorizedStaff) {
+    // A helper without "manage all bookings" can only complete today's jobs.
+    const entry = (shopDoc.staffAccess || []).find((x) => x.stylistId === String(req.stylistId)) || {};
+    const today = current.preferredAt >= Date.now() - 12 * 3600 * 1000 && current.preferredAt <= Date.now() + 36 * 3600 * 1000;
+    if (entry.canManageBookings === false && !(next === 'completed' && current.status === 'accepted' && today)) {
+      return res.status(403).json({ error: 'The shop owner manages bookings. You can complete today\u2019s appointments.' });
+    }
+  }
   if (!(TRANSITIONS[current.status] || []).includes(next)) {
     return res.status(400).json({ error: `A ${current.status} request can’t be changed to ${next}.` });
   }
   // Atomic: only succeeds if nobody changed this request since we read it.
   const r = await Request.findOneAndUpdate(
     { _id: current._id, status: current.status },
-    { status: next, updatedAt: Date.now(), ...(next === 'completed' ? { completedAt: Date.now() } : {}) },
+    { status: next, updatedAt: Date.now(), ...(next === 'completed' ? { completedAt: Date.now(), servedBy: String(req.stylistId), servedByName: await nameOf(req.stylistId) } : {}) },
     { new: true }
   );
   if (!r) return res.status(409).json({ error: 'This request was just updated. Refresh to see its latest status.' });

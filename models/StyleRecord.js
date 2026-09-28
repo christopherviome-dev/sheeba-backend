@@ -18,6 +18,13 @@ const StyleRecordSchema = new mongoose.Schema({
   // This Style" — never auto-populated from a portfolio or reference photo,
   // since neither of those is proof of what this specific service looked like.
   finishedPhoto: { type: String, default: null },
+  // "Fresh Look": the professional's photo of the finished look (kept separate,
+  // so it never replaces the customer's own photo).
+  proPhoto: { type: String, default: null },
+  proThumb: { type: String, default: null },
+  proPhotoAt: { type: Number, default: null },
+  proPhotoBy: { type: String, default: null }, // the professional's name
+  reelCount: { type: Number, default: 0 }, // angles in this look's Look Reel (frames live in LookReel)
   notes: { type: String, default: null },
   completedAt: { type: Number, required: true },
   createdAt: { type: Number, default: () => Date.now() },

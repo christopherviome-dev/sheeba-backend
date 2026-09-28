@@ -11,15 +11,32 @@ function requireAuth(req, res, next) {
     // (e.g. a customer "claiming" a professional's booking).
     if (payload.role === 'customer') return res.status(403).json({ error: 'This action is for professional accounts.' });
     req.stylistId = payload.id;
-    req.isAdmin = !!payload.isAdmin;
+    req.isAdmin = false; // admin rights are checked in the database, never taken from the token
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Session expired — please log in again.' });
   }
 }
 
-function requireAdmin(req, res, next) {
-  if (!req.isAdmin) return res.status(403).json({ error: 'Admins only.' });
+// Admin checks read the account's role from the DATABASE on every request
+// (never from the login token), so a removed admin loses access immediately.
+function requirePermission(perm) {
+  return async (req, res, next) => {
+    const { roleById, can } = require('../lib/adminRoles');
+    const role = await roleById(req.stylistId);
+    if (!can(role, perm)) return res.status(403).json({ error: role ? 'Your admin role doesn\u2019t include this.' : 'Admins only.' });
+    req.adminRole = role;
+    req.isAdmin = true;
+    next();
+  };
+}
+// Any admin role at all.
+async function requireAdmin(req, res, next) {
+  const { roleById } = require('../lib/adminRoles');
+  const role = await roleById(req.stylistId);
+  if (!role) return res.status(403).json({ error: 'Admins only.' });
+  req.adminRole = role;
+  req.isAdmin = true;
   next();
 }
 
@@ -42,4 +59,4 @@ function requireCustomerAuth(req, res, next) {
   }
 }
 
-module.exports = { requireAuth, requireAdmin, requireCustomerAuth };
+module.exports = { requireAuth, requireAdmin, requirePermission, requireCustomerAuth };

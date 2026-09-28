@@ -17,6 +17,7 @@ const { ensureCode } = require('../lib/codes');
 const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/members');
 const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
+const { resolveSource } = require('../lib/source');
 // Compared against when no account matches, so a wrong number takes as long
 // as a wrong password: a genuine hash of random text, made fresh at startup.
 const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
@@ -60,7 +61,8 @@ router.post('/register', async (req, res) => {
       ageFields = a.value;
     }
     const memberNumber = await nextMemberNumber({ Stylist, Customer });
-    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields });
+    const signupSource = await resolveSource(req.body.source); // where they came from (lib/source.js)
+    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields, signupSource });
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
     if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${customer.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: customer._id.toString(), priority: 'important' });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
@@ -268,6 +270,7 @@ router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) =
     preferredAt = t;
   }
   const r = await Request.create({
+    source: { type: 'rebook', at: Date.now() },
     stylistId: old.stylistId,
     styleId: currentStyle ? currentStyle.id : null,
     serviceNameSnapshot: currentStyle ? currentStyle.name : old.serviceNameSnapshot,
@@ -320,7 +323,14 @@ router.delete('/me/savings-goals/:id', requireCustomerAuth, async (req, res) => 
 // see routes/requests.js for where these are actually created. ----------
 router.get('/me/style-records', requireCustomerAuth, async (req, res) => {
   const list = await StyleRecord.find({ customerId: req.customerId }).sort({ completedAt: -1 });
-  res.json(list);
+  // Each shop's name and area (lean), so a look can say who did it and where.
+  const ids = [...new Set(list.map((r) => r.stylistId).filter(Boolean))];
+  const shops = ids.length ? await Stylist.find({ _id: { $in: ids } }, 'name salonName area city') : [];
+  const byId = Object.fromEntries(shops.map((s) => [s._id.toString(), s]));
+  res.json(list.map((r) => {
+    const s = byId[String(r.stylistId)];
+    return { ...(r.toObject ? r.toObject() : r), shopName: s ? s.salonName || s.name : null, shopPlace: s ? s.area || s.city || null : null };
+  }));
 });
 
 // "Save This Style" — the customer attaches the actual finished-result

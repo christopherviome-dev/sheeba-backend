@@ -10,7 +10,7 @@ const AdminActionSchema = new mongoose.Schema({
     required: true,
     enum: [
       'SHOP_APPROVED', 'VERIFICATION_APPROVED', 'VERIFICATION_REJECTED', 'PASSWORD_RESET_ISSUED', 'PASSWORD_RESET_DISMISSED', 'INVITE_REWARDS_PAID', 'INVITE_REWARD_VOIDED', 'INVITE_REWARD_VALIDATED', 'SETTING_CHANGED', 'SERVICE_APPROVED', 'SERVICE_REJECTED', 'REPORT_RESOLVED', 'REPORT_STATE_CHANGED',
-      'ACCOUNT_RESTRICTED', 'ACCOUNT_RESTORED',
+      'ACCOUNT_RESTRICTED', 'ACCOUNT_RESTORED', 'ADMIN_ROLE_GIVEN', 'ADMIN_ROLE_CHANGED', 'ADMIN_ROLE_REMOVED',
     ],
   },
   targetType: { type: String, enum: ['stylist', 'report', 'customer', 'password-reset', 'invite-reward', 'setting', 'service'], required: true },

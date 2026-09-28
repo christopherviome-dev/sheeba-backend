@@ -21,6 +21,7 @@ const StyleSchema = new mongoose.Schema({
   paymentRequirement: { type: String, enum: ['NO_PAYMENT_REQUIRED', 'DEPOSIT_REQUIRED', 'FULL_PAYMENT_REQUIRED'], default: 'NO_PAYMENT_REQUIRED' },
   depositAmount: { type: Number, default: null }, // minor units, only meaningful when DEPOSIT_REQUIRED
   likes: { type: [String], default: [] }, // clientIds
+  reelCount: { type: Number, default: 0 }, // angles in this service's Look Reel (frames live in LookReel)
 }, { _id: false });
 
 const StylistSchema = new mongoose.Schema({
@@ -97,9 +98,17 @@ const StylistSchema = new mongoose.Schema({
   // THIS shop's requests on the owner's behalf. Deliberately does not grant
   // access to edit this shop's branding, services, or account settings —
   // scoped narrowly to the operational side, per the actual stated need.
+  // Admin team role (see lib/adminRoles.js). null = not an admin. Older admin
+  // accounts have isAdmin: true and count as SUPER_ADMIN.
+  signupSource: { type: mongoose.Schema.Types.Mixed, default: null }, // where they came from (lib/source.js)
+  adminRole: { type: String, enum: ['SUPER_ADMIN', 'VERIFIER', 'MODERATOR', 'SUPPORT', 'ANALYST', 'FIELD_AGENT', null], default: null },
   staffAccess: [{
     stylistId: { type: String, required: true },
     addedAt: { type: Number, default: () => Date.now() },
+    // The owner decides, per helper. Phone numbers are hidden by default so a
+    // helper can serve the shop's customers without being able to take them.
+    canManageBookings: { type: Boolean, default: true },
+    canSeePhones: { type: Boolean, default: false },
   }],
   groupPoints: { type: Number, default: 0 },
   starStatus: { type: Boolean, default: false },

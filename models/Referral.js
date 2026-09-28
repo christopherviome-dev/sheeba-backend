@@ -9,7 +9,7 @@ const ReferralSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true },
   stylistId: { type: String, required: true },
   label: { type: String, required: true }, // e.g. "WhatsApp September"
-  channel: { type: String, enum: ['WHATSAPP', 'INSTAGRAM', 'FACEBOOK', 'BUSINESS_CARD', 'QR_POSTER', 'DIRECT_LINK', 'OTHER'], default: 'OTHER' },
+  channel: { type: String, enum: ['WHATSAPP', 'INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'BUSINESS_CARD', 'QR_POSTER', 'DIRECT_LINK', 'OTHER'], default: 'OTHER' },
   active: { type: Boolean, default: true },
   createdAt: { type: Number, default: () => Date.now() },
 });
