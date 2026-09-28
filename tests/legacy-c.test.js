@@ -1,0 +1,35 @@
+// Restored from the earlier test suites (sessions of 25–27 Sep).
+process.env.JWT_SECRET = 't'; process.env.PAYSTACK_SECRET_KEY = 't';
+const path = require('path'); const B = path.join(__dirname, '..');
+const R = (m) => require(path.join(B, m));
+require(path.join(B, 'node_modules/express-async-errors'));
+const jwt = R('node_modules/jsonwebtoken'), express = R('node_modules/express');
+const Customer = R('models/Customer'), ServiceType = R('models/ServiceType');
+const C = { ama: { id: 'ama', name: 'Ama', favourites: [], save: async function () { return this; } } };
+Customer.findById = async (id) => C[id] || null;
+ServiceType.find = async () => [];
+const app = express(); app.use(express.json()); app.use('/api/customers', R('routes/customers'));
+app.use((err, req, res, next) => { console.log('SERVER ERROR', err.message); res.status(500).json({ error: 'x' }); });
+let pass = 0, fail = 0; const check = (l, c, x = '') => { c ? pass++ : fail++; console.log((c ? 'PASS' : 'FAIL') + ' | ' + l + (c ? '' : '  ' + x)); };
+const AMA = jwt.sign({ id: 'ama', role: 'customer' }, 't'), PRO = jwt.sign({ id: 'pro' }, 't');
+const server = app.listen(8221, async () => {
+  const put = async (tok, body) => { const r = await fetch('http://localhost:8221/api/customers/me/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: JSON.stringify(body) }); return { s: r.status, j: await r.json() }; };
+  let r = await put(null, { feedFor: 'MEN' });
+  check('not logged in → 401', r.s === 401);
+  r = await put(PRO, { feedFor: 'MEN' });
+  check('a professional login cannot set customer preferences', r.s === 401 || r.s === 403);
+  r = await put(AMA, { feedFor: 'ALIENS' });
+  check('unknown "show me" choice refused', r.s === 400);
+  r = await put(AMA, { favourites: ['box-braids', 'fade', 'bridal-makeup', 'pedicure'] });
+  check('more than 3 favourites refused', r.s === 400);
+  r = await put(AMA, { favourites: ['box-braids', 'made-up-style'] });
+  check('unknown style refused', r.s === 400);
+  r = await put(AMA, { feedFor: 'WOMEN', favourites: ['box-braids', 'knotless-braids', 'box-braids'] });
+  check('saved: women\'s styles + 2 favourites (duplicate removed), onboarding recorded', r.s === 200 && C.ama.feedFor === 'WOMEN' && C.ama.favourites.join(',') === 'box-braids,knotless-braids' && C.ama.onboardedAt > 0);
+  const first = C.ama.onboardedAt;
+  r = await put(AMA, { feedFor: null });
+  check('"prefer not to say" clears it; first onboarding date kept', r.s === 200 && C.ama.feedFor === null && C.ama.onboardedAt === first);
+  r = await put(AMA, {});
+  check('skipping everything is fine', r.s === 200);
+  console.log('\n' + pass + ' passed, ' + fail + ' failed'); server.close(); process.exit(fail ? 1 : 0);
+});

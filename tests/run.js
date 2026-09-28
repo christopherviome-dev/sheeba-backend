@@ -12,7 +12,7 @@ for (const f of fs.readdirSync(__dirname).filter((x) => x.endsWith('.test.js')).
   const p = m ? +m[1] : 0, q = m ? +m[2] : 1;
   pass += p; fail += q;
   console.log(`${q ? 'FAIL' : ' ok '}  ${f.padEnd(28)} ${p} passed, ${q} failed`);
-  if (q) console.log(out.split('\n').filter((l) => /FAIL|Error/.test(l)).slice(0, 5).map((l) => '      ' + l).join('\n'));
+  if (q) console.log(out.split('\n').filter((l) => /FAIL|Error/.test(l)).slice(0, 6).map((l) => '      ' + (l.length > 160 ? l.slice(0, 160) + '…' : l)).join('\n'));
 }
 console.log(`\nTOTAL: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
