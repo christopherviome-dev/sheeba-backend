@@ -316,7 +316,7 @@ router.post('/service-proposals/:id/:decision', requireAuth, requirePermission('
 });
 
 // ---------- Admin switches ----------
-const SWITCHES = { ageCheck: 'boolean', pauseSignups: 'boolean', pauseBookings: 'boolean', verifiedOnly: 'boolean', inviteRewards: 'boolean', messages: 'boolean', announcement: 'text' };
+const SWITCHES = { ageCheck: 'boolean', pauseSignups: 'boolean', pauseBookings: 'boolean', verifiedOnly: 'boolean', inviteRewards: 'boolean', messages: 'boolean', aiAssistant: 'boolean', announcement: 'text' };
 // Every switch's current value, for the admin's Switches screen.
 router.get('/settings', requireAuth, requirePermission('switches'), async (req, res) => {
   const out = {};

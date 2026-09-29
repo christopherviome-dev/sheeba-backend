@@ -47,6 +47,7 @@ app.use('/api/catalog', require('./routes/catalog'));
 app.use('/api/prices', require('./routes/prices'));
 app.use('/api/training', require('./routes/training'));
 app.use('/api/analytics', require('./routes/analytics'));
+app.use('/api/assist', require('./routes/assist'));
 app.use('/api/team', require('./routes/team'));
 app.use('/api/reels', require('./routes/reels'));
 app.use('/api/field', require('./routes/field'));
