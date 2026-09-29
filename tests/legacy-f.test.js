@@ -3,6 +3,8 @@ process.env.JWT_SECRET = 't'; process.env.PAYSTACK_SECRET_KEY = 't';
 const path = require('path'); const B = path.join(__dirname, '..');
 const R = (m) => require(path.join(B, m));
 require(path.join(B, 'node_modules/express-async-errors'));
+// Admin switches: a stand-in returning nothing, so every switch uses its safe default (instant, no database).
+{ const Setting = require(path.join(B, 'models/Setting')); Setting.findById = async () => null; }
 // Added after this suite was written: rewards past their 7-day check are confirmed in one bulk update.
 { const IR = R('models/InviteReward'); IR.updateMany = async () => ({ modifiedCount: 0 }); }
 const jwt = R('node_modules/jsonwebtoken'), express = R('node_modules/express');

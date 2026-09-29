@@ -44,6 +44,7 @@ function publicCustomer(c) {
 }
 
 router.post('/register', async (req, res) => {
+  if (await getSetting('pauseSignups')) return res.status(503).json({ error: 'New sign-ups are paused for a short while. Please try again later.' });
   try {
     const { phone, password, name } = req.body;
     if (!phone || !password || !name) return res.status(400).json({ error: 'Phone, password, and name are required.' });
@@ -243,6 +244,7 @@ router.get('/me/history', requireCustomerAuth, async (req, res) => {
 // style's CURRENT configuration, never the historical snapshot, since a
 // new booking must reflect what the shop actually charges today.
 router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) => {
+  if (await getSetting('pauseBookings')) return res.status(503).json({ error: 'New bookings are paused for a short while. Please try again later.' });
   const c = await Customer.findById(req.customerId, 'accountStatus restrictionReason');
   if (c && c.accountStatus && c.accountStatus !== 'ACTIVE') return res.status(403).json({ error: `Your account is restricted${c.restrictionReason ? ': ' + c.restrictionReason : '.'} If you think this is a mistake, contact Sheeba.` });
   const old = await Request.findById(req.params.requestId);

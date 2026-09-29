@@ -89,6 +89,7 @@ const { discoverCard, DISCOVER_SHOPS } = require('../lib/discover');
 const { accountFromRequest } = require('../lib/invites');
 const { phoneCandidates } = require('../lib/passwords');
 const attempts = require('../lib/attempts');
+const { getSetting } = require('../lib/settings');
 // Anonymous follows, likes and visits feed popularity and ranking, so floods
 // from one address are capped. Generous (300 per 15 minutes) because many
 // phones on Ghana's mobile networks share one internet address.
@@ -102,7 +103,8 @@ function engagementFlood(req, res) {
 router.get('/discover', async (req, res) => {
   // Shops in one country at a time, so prices share a currency and "near" means near.
   const country = getCountry(String(req.query.country || '').toUpperCase()) ? String(req.query.country).toUpperCase() : 'GH';
-  const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country);
+  const verifiedOnly = !!(await getSetting('verifiedOnly')); // admin switch: only ID-checked professionals on Discover
+  const shops = (await Stylist.find({ status: 'APPROVED', accountStatus: 'ACTIVE' })).filter((s) => countryOf(s) === country && (!verifiedOnly || s.verified));
   let visits = {};
   try {
     const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;

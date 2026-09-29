@@ -10,6 +10,7 @@ const Conversation = require('../models/Conversation');
 const Customer = require('../models/Customer');
 const { markInviteEarned } = require('../lib/invites');
 const { resolveSource } = require('../lib/source');
+const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
 const V = require('../lib/validate');
 const StyleRecord = require('../models/StyleRecord');
@@ -106,6 +107,7 @@ const clip = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : undefined
 // Submit a booking request to a specific professional (or an open request).
 router.post('/', async (req, res) => {
   try {
+    if (await getSetting('pauseBookings')) return res.status(503).json({ error: 'New bookings are paused for a short while. Please try again later.' });
     const { stylistId, styleId, clientId } = req.body;
     const source = await resolveSource(req.body.source); // where this booking came from (lib/source.js)
     // A marketing-link code (old field, or the booking's source) credits that link below: only if it belongs to THIS shop.
@@ -282,7 +284,8 @@ router.put('/:id/status', requireAuth, async (req, res) => {
     await notifyRealCustomer(r.clientId, { type: 'SERVICE_COMPLETED', title: 'Your service is complete', entityType: 'request', entityId: r._id.toString(), priority: 'normal' });
     // Invite rewards: if the customer or the professional on this job joined
     // through someone's code, this may be their first completed job.
-    try { await markInviteEarned(r, { Stylist, Customer, notify }); } catch (e) { /* non-fatal: rewards never block a completion */ }
+    // Rewards can be switched off by the admin (who invited whom is still recorded).
+    try { if (await getSetting('inviteRewards')) await markInviteEarned(r, { Stylist, Customer, notify }); } catch (e) { /* non-fatal: rewards never block a completion */ }
     // The real Style Record foundation, finally built — created only for a
     // genuine logged-in customer (same honest rule as everywhere else
     // tonight: an anonymous booker's record would be unreadable by anyone).

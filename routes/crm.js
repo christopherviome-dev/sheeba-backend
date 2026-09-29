@@ -100,15 +100,27 @@ router.get('/me/dashboard', requireAuth, async (req, res) => {
 // Real customer list — name, real completed count, real last-activity time.
 router.get('/me/customers', requireAuth, async (req, res) => {
   const groups = await realCustomerGroups(req.stylistId);
+  const DAY = 24 * 3600 * 1000, now = Date.now();
+  const doneAt = (r) => r.completedAt || r.updatedAt;
   const list = groups.map(g => {
-    const completed = g.requests.filter(r => r.status === 'completed');
+    const completed = g.requests.filter(r => r.status === 'completed').map(doneAt).filter(Boolean).sort((a, b) => a - b);
     const last = g.requests.slice().sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    // Return pattern from REAL visits: needs at least two completed visits to predict anything.
+    let usualEveryDays = null, nextDueAt = null, returnStatus = null;
+    if (completed.length >= 2) {
+      const gaps = completed.slice(1).map((t, i) => t - completed[i]);
+      usualEveryDays = Math.max(1, Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length / DAY));
+      nextDueAt = completed[completed.length - 1] + usualEveryDays * DAY;
+      returnStatus = now > nextDueAt + 3 * DAY ? 'OVERDUE' : nextDueAt - now <= 7 * DAY ? 'DUE_SOON' : 'ON_TRACK';
+    }
     return {
       customerId: g.customerId,
       name: g.name,
       totalCompleted: completed.length,
       isRepeat: completed.length >= 2,
       lastActivityAt: last ? last.updatedAt : null,
+      lastVisitAt: completed.length ? completed[completed.length - 1] : null,
+      usualEveryDays, nextDueAt, returnStatus,
     };
   }).sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
   res.json(list);

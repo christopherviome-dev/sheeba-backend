@@ -7,6 +7,7 @@ const Customer = require('../models/Customer');
 const { requireAuth, requireCustomerAuth } = require('../middleware/auth');
 const V = require('../lib/validate');
 const { roleById, can } = require('../lib/adminRoles');
+const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
 const findConv = async (id) => { try { return await Conversation.findById(id); } catch (e) { return null; } }; // bad ids → clean 404
 
@@ -41,6 +42,7 @@ function isParticipant(actor, conv) {
 // per customer+stylist pair, reused across every future request — the
 // relationship is ongoing, not one conversation per booking.
 router.post('/conversations', requireCustomerAuth, async (req, res) => {
+  if (!(await getSetting('messages'))) return res.status(503).json({ error: 'Messages are paused for a short while. You can still call or WhatsApp the professional.' });
   const { stylistId, requestId } = req.body;
   if (!stylistId) return res.status(400).json({ error: 'Missing stylistId.' });
   let stylist = null;
@@ -100,6 +102,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
 // service completed) are never created from here — only automatically, by
 // routes/requests.js, when the real underlying record actually changes.
 router.post('/conversations/:id/messages', async (req, res) => {
+  if (!(await getSetting('messages'))) return res.status(503).json({ error: 'Messages are paused for a short while. You can still call or WhatsApp the professional.' });
   const actor = identifyActor(req);
   const conv = await findConv(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found.' });

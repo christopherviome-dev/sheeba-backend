@@ -18,14 +18,14 @@ const InviteReward = require('../models/InviteReward');
 const Request = require('../models/Request');
 const { notify } = require('./notifications');
 const { validateDue } = require('../lib/invites');
-const { setSetting } = require('../lib/settings');
+const { setSetting, getSetting } = require('../lib/settings');
 const ServiceType = require('../models/ServiceType');
 
 const router = express.Router();
 
 // The audit log, with WHO did each action (now that there's an admin team).
 router.get('/audit', requireAuth, requirePermission('audit'), async (req, res) => {
-  const list = await AdminAction.find({}).sort({ createdAt: -1 }).limit(200);
+  const list = await AdminAction.find({}).sort({ createdAt: -1 }).limit(1000); // enough for months of grouping
   const names = {};
   for (const id of [...new Set(list.map((a) => a.adminId).filter(Boolean))]) {
     try { const s = await Stylist.findById(id, 'name'); names[id] = s ? s.name : null; } catch (e) { /* bad id */ }
@@ -316,14 +316,25 @@ router.post('/service-proposals/:id/:decision', requireAuth, requirePermission('
 });
 
 // ---------- Admin switches ----------
-const SWITCHES = { ageCheck: 'boolean' };
+const SWITCHES = { ageCheck: 'boolean', pauseSignups: 'boolean', pauseBookings: 'boolean', verifiedOnly: 'boolean', inviteRewards: 'boolean', messages: 'boolean', announcement: 'text' };
+// Every switch's current value, for the admin's Switches screen.
+router.get('/settings', requireAuth, requirePermission('switches'), async (req, res) => {
+  const out = {};
+  for (const k of Object.keys(SWITCHES)) out[k] = await getSetting(k);
+  res.json(out);
+});
 router.put('/settings/:key', requireAuth, requirePermission('switches'), async (req, res) => {
   const { key } = req.params;
   if (!SWITCHES[key]) return res.status(404).json({ error: 'Unknown setting.' });
-  if (typeof req.body.value !== 'boolean') return res.status(400).json({ error: 'Choose on or off.' });
-  await setSetting(key, req.body.value, req.stylistId);
-  try { await AdminAction.create({ adminId: req.stylistId, action: 'SETTING_CHANGED', targetType: 'setting', targetId: key, reason: `${key} ${req.body.value ? 'on' : 'off'}` }); } catch (e) { /* non-fatal */ }
-  res.json({ ok: true, key, value: req.body.value });
+  let value = req.body.value;
+  if (SWITCHES[key] === 'boolean' && typeof value !== 'boolean') return res.status(400).json({ error: 'Choose on or off.' });
+  if (SWITCHES[key] === 'text') {
+    if (typeof value !== 'string') return res.status(400).json({ error: 'Enter the text.' });
+    value = value.replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+  await setSetting(key, value, req.stylistId);
+  try { await AdminAction.create({ adminId: req.stylistId, action: 'SETTING_CHANGED', targetType: 'setting', targetId: key, reason: SWITCHES[key] === 'text' ? `${key}: ${value || '(cleared)'}` : `${key} ${value ? 'on' : 'off'}` }); } catch (e) { /* non-fatal */ }
+  res.json({ ok: true, key, value });
 });
 
 module.exports = router;

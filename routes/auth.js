@@ -41,6 +41,7 @@ function publicStylist(s) {
 
 // Register a new stylist account (creates a bare account — they fill in salon details after)
 router.post('/register', async (req, res) => {
+  if (await getSetting('pauseSignups')) return res.status(503).json({ error: 'New sign-ups are paused for a short while. Please try again later.' });
   const countryCheck = checkCountry(req.body.country);
   if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
   const country = countryCheck.value;
