@@ -235,8 +235,14 @@ router.get('/:id', async (req, res) => {
   const isPubliclyVisible = st.status === 'APPROVED' && st.accountStatus === 'ACTIVE';
   if (!isPubliclyVisible && !isAdminRequest && !isOwner) return res.status(404).json({ error: 'Shop not found.' });
   const completedJobs = await Request.countDocuments({ stylistId: st._id.toString(), status: 'completed' });
+  // Customers' ratings (1–5), shown only from 3 ratings up so one early rating can't define a new professional.
+  let rating = null; // an extra: if it can't be worked out, the shop page still shows
+  try {
+    const rated = await Request.find({ stylistId: st._id.toString(), status: 'completed', rating: { $gte: 1 } }, 'rating');
+    if (rated.length >= 3) rating = { average: Math.round((rated.reduce((t, x) => t + x.rating, 0) / rated.length) * 10) / 10, count: rated.length };
+  } catch (e) { /* no rating shown */ }
   // Social proof for customers: loves received and jobs done on Sheeba.
-  res.json({ ...publicStylist(st), stats: { loves: (st.styles || []).reduce((t, x) => t + (x.likes || []).length, 0), completedJobs } });
+  res.json({ ...publicStylist(st), stats: { loves: (st.styles || []).reduce((t, x) => t + (x.likes || []).length, 0), completedJobs, rating } });
 });
 
 const Request = require('../models/Request');

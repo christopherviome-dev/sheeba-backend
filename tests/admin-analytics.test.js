@@ -38,6 +38,7 @@ TrainingWork.countDocuments = async () => 6; Conversation.countDocuments = async
 let pwFilter = null; PasswordResetRequest.countDocuments = async (f) => { pwFilter = f; return 2; };
 ServiceType.countDocuments = async () => 1; ServiceType.find = async () => [];
 DailyCount.find = async () => counts;
+R('models/CommunityFeedback').countDocuments = async () => 3; // Telegram messages waiting
 const upserts = []; DailyCount.findOneAndUpdate = async (f, u) => { upserts.push({ f, u }); return {}; };
 const app = express(); app.set('trust proxy', 1); app.use(express.json()); app.use('/api/analytics', R('routes/analytics'));
 app.use((err, req, res, next) => { console.log('SERVER ERROR', err.message); res.status(500).json({ error: 'x' }); });
@@ -83,6 +84,7 @@ const server = app.listen(8237, async () => {
   check('WANTED BUT SCARCE: locs (25 searches, no shops) comes first', o.demand.wantedButScarce[0].key === 'locs' && o.demand.wantedButScarce[0].shops === 0);
   check('engagement: 4 likes, 2 follows, 4 conversations', o.engagement.likes === 4 && o.engagement.follows === 2 && o.engagement.conversations === 4);
   check('trust: 2 open reports (1 urgent), 1 ID waiting, 2 password requests (counted as OPEN)', o.trust.openReports === 2 && o.trust.urgentOpen === 1 && o.trust.pendingVerifications === 1 && o.trust.passwordHelp === 2 && pwFilter.status === 'OPEN');
+  check('community feedback waiting is counted for the To do badge (3)', o.trust.communityFeedback === 3);
   check('invites and training counted', o.invites.VALIDATED === 2 && o.training.skillsSignedOff === 2 && o.training.graduated === 1 && o.training.worksPosted === 6);
   console.log('--- THE MAP ---');
   r = await call('GET', '/api/analytics/map', ADMIN);

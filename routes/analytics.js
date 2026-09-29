@@ -41,7 +41,7 @@ router.post('/event', async (req, res) => {
 router.get('/overview', requireAuth, requirePermission('analytics'), async (req, res) => {
   const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 365);
   const now = Date.now(), since = now - days * DAY, before = since - days * DAY;
-  const [shops, customers, requests, reports, invites, plans, worksPosted, conversations, passwordHelp, proposals, counts, catalog] = await Promise.all([
+  const [shops, customers, requests, reports, invites, plans, worksPosted, conversations, passwordHelp, proposals, counts, catalog, communityFeedback] = await Promise.all([
     Stylist.find({}, 'createdAt status accountStatus role supervisorStatus verified pendingReview memberNumber country city area category services styles followers'),
     Customer.find({}, 'createdAt memberNumber country accountStatus'),
     Request.find({}, 'status createdAt completedAt updatedAt priceSnapshot currencySnapshot serviceNameSnapshot'),
@@ -54,6 +54,7 @@ router.get('/overview', requireAuth, requirePermission('analytics'), async (req,
     ServiceType.countDocuments({ status: 'PENDING' }),
     DailyCount.find({ day: { $gte: dayKey(since) } }),
     getCatalog(),
+    require('../models/CommunityFeedback').countDocuments({ handled: { $ne: true } }).catch(() => 0), // Telegram messages not yet handled
   ]);
   const styleName = {}; const styleService = {};
   for (const s of catalog) for (const st of s.styles || []) { styleName[st.key] = st.name; styleService[st.key] = s.name; }
@@ -155,7 +156,7 @@ router.get('/overview', requireAuth, requirePermission('analytics'), async (req,
       openReports: reports.filter((r) => !['RESOLVED', 'DISMISSED'].includes(r.state || 'OPEN')).length,
       urgentOpen: reports.filter((r) => r.urgent && !['RESOLVED', 'DISMISSED'].includes(r.state || 'OPEN')).length,
       pendingVerifications: shops.filter((s) => s.pendingReview && !s.verified).length,
-      passwordHelp, serviceProposals: proposals,
+      passwordHelp, serviceProposals: proposals, communityFeedback,
     },
     invites: tally(invites, (i) => i.status),
     training: {

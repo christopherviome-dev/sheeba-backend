@@ -20,6 +20,7 @@ Stylist.findById = async (id) => S[String(id)] || null; Stylist.find = async () 
 Customer.findById = async (id) => C[String(id)] || null; Customer.exists = async (f) => !!C[String(f._id)];
 Activity.findOne = async () => null; Activity.create = async () => ({}); Request.countDocuments = async () => 0;
 Request.create = async (f) => ({ ...f, _id: { toString: () => 'r' + (++seq) } }); Notification.create = async () => ({});
+Request.find = async () => []; // no ratings yet in this suite
 Conversation.findOne = async () => null; Conversation.create = async () => ({ _id: { toString: () => 'c' }, save: async () => {} });
 SavingsGoal.countDocuments = async () => GOALS.length; SavingsGoal.create = async (f) => { GOALS.push(f); return f; };
 Referral.countDocuments = async () => LINKS.length; Referral.exists = async () => false; Referral.create = async (f) => { LINKS.push(f); return f; };

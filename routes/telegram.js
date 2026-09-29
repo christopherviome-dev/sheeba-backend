@@ -40,7 +40,8 @@ router.get('/feedback', requireAuth, requirePermission('telegram'), async (req, 
 });
 
 router.put('/feedback/:id/handled', requireAuth, requirePermission('telegram'), async (req, res) => {
-  const f = await CommunityFeedback.findByIdAndUpdate(req.params.id, { handled: true }, { new: true });
+  let f = null;
+  try { f = await CommunityFeedback.findByIdAndUpdate(req.params.id, { handled: true }, { new: true }); } catch (e) { /* a bad link */ }
   if (!f) return res.status(404).json({ error: 'Not found.' });
   res.json(f);
 });
