@@ -34,7 +34,7 @@ Conversation.create = async (f) => { const id = 'c' + (++seq); CONV[id] = doc({ 
 Conversation.findById = get(CONV);
 Message.create = async (f) => { MSG.push(f); return f; };
 Message.find = () => { const p = Promise.resolve(MSG); p.sort = () => Promise.resolve(MSG); return p; };
-Notification.create = async () => ({});
+const notes = []; Notification.create = async (n) => { notes.push(n); return n; };
 const app = express(); app.use(express.json({ limit: '2mb' }));
 app.use('/api/stylists', R('routes/crm')); app.use('/api', R('routes/messages'));
 app.use((err, req, res, next) => { console.log('SERVER ERROR', err.message); res.status(500).json({ error: 'x' }); });
@@ -89,11 +89,13 @@ const server = app.listen(8227, async () => {
   check('…but can read it when handling a report', r.s === 200);
   r = await call('GET', '/api/conversations/bad!id/messages', AMA);
   check('bad conversation link → clean 404 (no crash)', r.s === 404);
+  r = await call('POST', `/api/conversations/${cid}/messages`, PRO, { text: 'Saturday 10am works' });
+  check('a professional replies: the customer is told "New message from Etornam" (the shop, not "your stylist")', r.s === 200 && notes.some((n) => n.recipientId === 'ama' && n.title === 'New message from Etornam'), JSON.stringify(notes.map((n) => n.title)));
   S.pro.accountStatus = 'RESTRICTED';
   r = await call('POST', `/api/conversations/${cid}/messages`, PRO, { text: 'Hello' });
   check('a restricted professional cannot send messages', r.s === 403);
   S.pro.accountStatus = 'ACTIVE';
-  for (let i = 0; i < 30; i++) await call('POST', `/api/conversations/${cid}/messages`, PRO, { text: 'msg ' + i });
+  for (let i = 0; i < 29; i++) await call('POST', `/api/conversations/${cid}/messages`, PRO, { text: 'msg ' + i }); // + the reply above = 30
   r = await call('POST', `/api/conversations/${cid}/messages`, PRO, { text: 'one too many' });
   check('flooding: 30 messages allowed, the 31st within 15 minutes → paused', r.s === 429, r.s);
   console.log('\n' + pass + ' passed, ' + fail + ' failed'); server.close(); process.exit(fail ? 1 : 0);

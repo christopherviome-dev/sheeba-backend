@@ -82,7 +82,7 @@ router.post('/register', async (req, res) => {
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'stylist', newDoc: stylist, Stylist, Customer, notify });
     if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${stylist.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: stylist._id.toString(), priority: 'important' });
-    if (isApprentice) await notify({ recipientId: supervisor._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_REQUEST', title: `${stylist.name} wants to join your shop as an apprentice`, message: 'Confirm or decline in My Shop \u2192 Account.', entityType: 'shop', entityId: supervisor._id.toString(), priority: 'action_required' });
+    if (isApprentice) await notify({ recipientId: supervisor._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_REQUEST', title: `${stylist.name} wants to join your shop as a professional in training`, message: 'Confirm or decline in My Shop \u2192 Account.', entityType: 'shop', entityId: supervisor._id.toString(), priority: 'action_required' });
     await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
   } catch (e) {

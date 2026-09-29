@@ -507,7 +507,7 @@ router.post('/:id/approve', requireAuth, requirePermission('ids'), async (req, r
 router.post('/:id/reject-verification', requireAuth, requirePermission('ids'), async (req, res) => {
   try {
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
-    if (reason.length < 5) return res.status(400).json({ error: 'Give a clear reason so the stylist knows what to fix.' });
+    if (reason.length < 5) return res.status(400).json({ error: 'Give a clear reason so the professional knows what to fix.' });
     let st;
     try { st = await Stylist.findById(req.params.id); } catch (e) { return res.status(404).json({ error: 'Account not found.' }); }
     if (!st) return res.status(404).json({ error: 'Account not found.' });

@@ -7,6 +7,8 @@ const CommunityFeedbackSchema = new mongoose.Schema({
   senderName: { type: String, default: 'Unknown' },
   text: { type: String, required: true },
   handled: { type: Boolean, default: false },
+  // Answers posted back into the Telegram group from Admin (who answered, what, when).
+  replies: { type: [{ text: String, byName: String, at: Number, _id: false }], default: [] },
   createdAt: { type: Number, default: () => Date.now() },
 });
 

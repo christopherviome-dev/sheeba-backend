@@ -115,7 +115,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
   if (!isRealParticipant) return res.status(403).json({ error: 'Not authorized.' });
   // Restricted or suspended accounts can't send messages.
   const Me = actor.type === 'customer' ? Customer : Stylist;
-  const me = await Me.findById(actor.id, 'accountStatus');
+  const me = await Me.findById(actor.id, 'accountStatus name salonName');
   if (!me || (me.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(403).json({ error: 'Your account can\u2019t send messages right now.' });
   // At most 30 messages per 15 minutes from one sender (then a 15-minute pause): stops flooding.
   const k = `msg:${actor.type}:${actor.id}`;
@@ -151,7 +151,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (actor.type === 'customer') {
       await notify({ recipientId: conv.stylistId, recipientType: 'stylist', type: 'NEW_MESSAGE', title: 'New message', message: text ? text.slice(0, 80) : '📷 Photo', entityType: 'conversation', entityId: conv._id.toString() });
     } else {
-      await notify({ recipientId: conv.customerId, recipientType: 'customer', type: 'NEW_MESSAGE', title: 'New message from your stylist', message: text ? text.slice(0, 80) : '📷 Photo', entityType: 'conversation', entityId: conv._id.toString() });
+      await notify({ recipientId: conv.customerId, recipientType: 'customer', type: 'NEW_MESSAGE', title: `New message from ${(me && (me.salonName || me.name)) || 'your professional'}`, message: text ? text.slice(0, 80) : '📷 Photo', entityType: 'conversation', entityId: conv._id.toString() });
     }
   } catch (e) { /* non-fatal */ }
   res.json(msg);
