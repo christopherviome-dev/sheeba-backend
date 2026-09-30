@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
-// One record per person who joined Sheeba through someone's code.
+// One record per person who joined Mepluge through someone's code.
 //   JOINED → CHECKING (their first job is completed) → VALIDATED (automatically
 //   after 7 quiet days) — or UNDER_REVIEW (a warning sign; the admin decides)
-//   → VALIDATED or VOID. Validated rewards become coupons once Sheeba takes
+//   → VALIDATED or VOID. Validated rewards become coupons once Mepluge takes
 //   payments. (EARNED/PAID are kept only for records made before this.)
 // One reward per referred account, ever (unique index below).
 const InviteRewardSchema = new mongoose.Schema({

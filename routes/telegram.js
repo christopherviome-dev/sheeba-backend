@@ -92,7 +92,7 @@ router.post('/feedback/:id/reply', requireAuth, requirePermission('telegram'), a
   if (!r.ok) return res.status(502).json({ error: r.description || 'Telegram did not accept the answer.' });
   const Stylist = require('../models/Stylist');
   const me = await Stylist.findById(req.stylistId, 'name');
-  f.replies = [...(f.replies || []), { text, byName: (me && me.name) || 'Sheeba', at: Date.now() }];
+  f.replies = [...(f.replies || []), { text, byName: (me && me.name) || 'Mepluge', at: Date.now() }];
   f.handled = true;
   await f.save();
   res.json(f);

@@ -32,4 +32,12 @@ const NotificationSchema = new mongoose.Schema({
 
 NotificationSchema.index({ recipientId: 1, recipientType: 1, createdAt: -1 });
 
+// Every alert also goes to the person's phone(s), with the phone's own sound.
+// Fire-and-forget: a phone alert failing never affects the alert itself.
+NotificationSchema.post('save', function (doc) {
+  try {
+    require('../lib/push').sendPush(doc.recipientType, doc.recipientId, { title: doc.title, body: doc.message || '', url: '/notifications', tag: doc.type }).catch(() => {});
+  } catch (e) { /* ignore */ }
+});
+
 module.exports = mongoose.models.Notification || mongoose.model('Notification', NotificationSchema);

@@ -70,7 +70,7 @@ const server = app.listen(8195, async () => {
   check('a normal professional cannot issue passwords (403)', r.s === 403);
   r = await call('POST', '/api/admin/password-resets/pr1/issue', ADMIN);
   const temp = r.j.tempPassword;
-  check('admin issues a temporary password', r.s === 200 && /^Sheeba-/.test(temp || ''), JSON.stringify(r.j));
+  check('admin issues a temporary password', r.s === 200 && /^Mepluge-/.test(temp || ''), JSON.stringify(r.j));
   check('stored scrambled, and it really works', bcrypt.compareSync(temp, styl.pro1.passwordHash));
   check('old password no longer works', !bcrypt.compareSync('oldpass123', styl.pro1.passwordHash));
   check('account marked "must change password"', styl.pro1.mustChangePassword === true);

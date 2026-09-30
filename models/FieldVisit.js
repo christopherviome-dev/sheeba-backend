@@ -14,7 +14,7 @@ const FieldVisitSchema = new mongoose.Schema({
   contactPhone: { type: String, default: null }, // only if they gave it, for following up
   photos: { type: [String], default: [] },       // up to 4, only with consent
   photoConsent: { type: Boolean, default: false },
-  signedUpStylistId: { type: String, default: null }, // their Sheeba account, once linked
+  signedUpStylistId: { type: String, default: null }, // their Mepluge account, once linked
   loggedBy: { type: String, required: true },
   at: { type: Number, default: () => Date.now() }, // when the stop happened (from the phone)
 });

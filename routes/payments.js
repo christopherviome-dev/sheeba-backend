@@ -27,7 +27,7 @@ router.post('/initialize', requireCustomerAuth, async (req, res) => {
   const style = (stylist.styles || []).find(s => s.id === styleId);
   if (!style) return res.status(404).json({ error: 'Service not found.' });
   if (style.paymentRequirement === 'NO_PAYMENT_REQUIRED') {
-    return res.status(400).json({ error: 'This service does not use Sheeba payments — arrange payment directly with the professional.' });
+    return res.status(400).json({ error: 'This service does not use Mepluge payments — arrange payment directly with the professional.' });
   }
   const useDeposit = purpose === 'DEPOSIT' && style.paymentRequirement === 'DEPOSIT_REQUIRED';
   const amountMinor = useDeposit ? style.depositAmount : Math.round(style.price * 100);

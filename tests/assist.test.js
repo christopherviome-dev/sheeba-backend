@@ -1,4 +1,4 @@
-// The Sheeba assistant: plain questions → real professionals (29 Sep).
+// The Mepluge assistant: plain questions → real professionals (29 Sep).
 process.env.JWT_SECRET = 't'; process.env.PAYSTACK_SECRET_KEY = 't';
 const path = require('path'); const B = path.join(__dirname, '..');
 const R = (m) => require(path.join(B, m));
@@ -31,6 +31,7 @@ const server = app.listen(0, async () => {
   check('"I have a budget of 200 for locks" → Dreadlocks, 200', u('I have a budget of 200 for locks').style.key === 'dreadlocks' && u('I have a budget of 200 for locks').budget === 200);
   check('"GH₵150 nails East Legon" → nails, 150, East Legon', u('GH₵150 nails East Legon').service === 'nails' && u('GH₵150 nails East Legon').budget === 150 && u('GH₵150 nails East Legon').place === 'east legon');
   check('"barber near me" → barbering, near me', u('barber near me').service === 'barbering' && u('barber near me').nearMe === true);
+  check('"photographer for my wedding in Accra" → photography, Accra', u('photographer for my wedding in Accra').service === 'photography' && u('photographer for my wedding in Accra').place === 'accra');
   console.log('--- REAL ANSWERS ---');
   let r = await ask("I'm at Koforidua, where do I find a makeup artist?");
   check('Koforidua makeup: Efua Glam, with a plain answer', r.s === 200 && r.j.results[0].name === 'Efua Glam' && /makeup artist/.test(r.j.answer) && /Koforidua/.test(r.j.answer), r.j.answer);

@@ -38,7 +38,7 @@ const server = app.listen(8217, async () => {
   console.log('--- THE CATALOG ---');
   let r = await call('GET', '/api/catalog');
   const keys = r.j.services.map((x) => x.key);
-  check('six services, Barbering is its own service', r.s === 200 && keys.join(',') === 'hair,barbering,makeup,nails,lashes,skin');
+  check('seven services (Photography added 30 Sep), Barbering is its own service', r.s === 200 && keys.join(',') === 'hair,barbering,makeup,nails,lashes,skin,photography');
   check('barbering has its own styles (fade, waves, beard…)', r.j.services.find((x) => x.key === 'barbering').styles.some((x) => x.key === 'fade'));
   check("Men's Dreadlocks marked as a men's style", r.j.services.find((x) => x.key === 'hair').styles.find((x) => x.key === 'mens-dreadlocks').for === 'men');
 

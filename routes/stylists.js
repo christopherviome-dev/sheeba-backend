@@ -26,6 +26,7 @@ const router = express.Router();
 function publicStylist(s, includeSensitive = false) {
   const obj = s.toObject ? s.toObject() : { ...s }; // always a copy: never alter the stored record
   delete obj.passwordHash;
+  obj.googleConnected = !!obj.googleSub; delete obj.googleSub; // a yes/no only: the Google id never leaves the server
   if (!includeSensitive) {
     delete obj.ghanaCardNum;
     delete obj.idNumber;
@@ -42,7 +43,8 @@ function publicStylist(s, includeSensitive = false) {
     // Never public: who is the admin, who is a minor, staff lists, restriction
     // details, verification dates and document types.
     for (const k of ['isAdmin', 'isMinor', 'staffAccess', 'restrictionReason', 'restrictedAt', 'restrictedBy', 'restoredAt',
-      'supervisorId', 'ageConfirmedAt', 'idType', 'verificationSubmittedAt', 'verificationReviewedAt']) delete obj[k];
+      'supervisorId', 'ageConfirmedAt', 'idType', 'verificationSubmittedAt', 'verificationReviewedAt',
+      'googleSub', 'email', 'emailVerified', 'marketingOptIn', 'signupSource']) delete obj[k];
     // Public locations are rounded to about 1 km: enough for "near me" and
     // distances, never someone's front door (many professionals work from home).
     if (obj.location && typeof obj.location.lat === 'number' && typeof obj.location.lng === 'number') {
@@ -241,7 +243,7 @@ router.get('/:id', async (req, res) => {
     const rated = await Request.find({ stylistId: st._id.toString(), status: 'completed', rating: { $gte: 1 } }, 'rating');
     if (rated.length >= 3) rating = { average: Math.round((rated.reduce((t, x) => t + x.rating, 0) / rated.length) * 10) / 10, count: rated.length };
   } catch (e) { /* no rating shown */ }
-  // Social proof for customers: loves received and jobs done on Sheeba.
+  // Social proof for customers: loves received and jobs done on Mepluge.
   res.json({ ...publicStylist(st), stats: { loves: (st.styles || []).reduce((t, x) => t + (x.likes || []).length, 0), completedJobs, rating } });
 });
 
@@ -434,7 +436,7 @@ router.post('/me/verify', requireAuth, async (req, res) => {
     if (!st) return res.status(404).json({ error: 'Account not found.' });
     // A verified badge must always describe the details that were actually
     // reviewed. Silently swapping name/card after approval would defeat it.
-    if (st.verified) return res.status(400).json({ error: 'Your identity is already verified. Contact Sheeba support if your details changed.' });
+    if (st.verified) return res.status(400).json({ error: 'Your identity is already verified. Contact Mepluge support if your details changed.' });
 
     const nameCheck = cleanLegalName(req.body.legalFullName);
     if (!nameCheck.ok) return res.status(400).json({ error: nameCheck.error });
@@ -672,9 +674,9 @@ router.post('/:id/styles/:styleId/like', async (req, res) => {
 // phone — never a fake invite to someone who hasn't registered.
 router.post('/me/staff', requireAuth, async (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: 'Enter the phone number of their own Sheeba account.' });
+  if (!phone) return res.status(400).json({ error: 'Enter the phone number of their own Mepluge account.' });
   const staffAccount = await Stylist.findOne({ phone: { $in: phoneCandidates(phone) } }); // any format: numbers are stored internationally
-  if (!staffAccount) return res.status(404).json({ error: 'No Sheeba account found with that phone number — they need to register their own account first.' });
+  if (!staffAccount) return res.status(404).json({ error: 'No Mepluge account found with that phone number — they need to register their own account first.' });
   if (staffAccount._id.toString() === req.stylistId) return res.status(400).json({ error: 'You can\'t add yourself as staff.' });
   const owner = await Stylist.findById(req.stylistId);
   if (owner.staffAccess.some(s => s.stylistId === staffAccount._id.toString())) return res.status(400).json({ error: 'They already have access.' });
@@ -697,7 +699,7 @@ router.post('/me/service-proposals', requireAuth, async (req, res) => {
   if (!st) return res.status(404).json({ error: 'Not found.' });
   const catalog = await getCatalog();
   const existing = catalog.find((c) => c.key === key || c.name.toLowerCase() === t.value.toLowerCase());
-  if (existing) { // already offered on Sheeba: just add it
+  if (existing) { // already offered on Mepluge: just add it
     st.services = [...new Set([...servicesOf(st), existing.key])];
     await st.save();
     return res.json({ added: existing.key, name: existing.name });

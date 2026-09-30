@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
       if (booking && String(booking.stylistId) === targetId) requestId = booking._id.toString();
     }
   } else {
-    targetType = null; // a general report about Sheeba
+    targetType = null; // a general report about Mepluge
   }
 
   attempts.fail([[ipKey, 5]]); // counts every report filed from this address

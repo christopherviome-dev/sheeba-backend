@@ -20,7 +20,7 @@ const shops = [
   { _id: 's4', name: 'Abena', status: 'UNDER_REVIEW', role: 'APPRENTICE', supervisorStatus: 'APPROVED', memberNumber: 12, createdAt: ago(1), styles: [], location: { lat: 5.5, lng: -0.4 } },
   { _id: 's5', name: 'Bad', status: 'APPROVED', accountStatus: 'RESTRICTED', role: 'PROFESSIONAL', memberNumber: 1200, createdAt: ago(3), styles: [], location: { lat: 6, lng: -1 } },
 ];
-const customers = [{ memberNumber: 4, country: 'GH', createdAt: ago(10) }, { memberNumber: 5, country: 'GB', createdAt: ago(1) }, { memberNumber: 1300, country: 'GH', createdAt: ago(60), accountStatus: 'SUSPENDED' }];
+const customers = [{ memberNumber: 4, country: 'GH', createdAt: ago(10), email: 'a@gmail.com', emailVerified: true, marketingOptIn: true }, { memberNumber: 5, country: 'GB', createdAt: ago(1) }, { memberNumber: 1300, country: 'GH', createdAt: ago(60), accountStatus: 'SUSPENDED' }];
 const requests = [
   { status: 'completed', createdAt: ago(3), completedAt: now - 2 * DAY, priceSnapshot: 300, currencySnapshot: 'GHS', serviceNameSnapshot: 'Knotless' },
   { status: 'completed', createdAt: ago(50), completedAt: now - 49 * DAY, priceSnapshot: 20, currencySnapshot: 'GBP', serviceNameSnapshot: 'Fade' },
@@ -65,6 +65,7 @@ const server = app.listen(8237, async () => {
   r = await call('GET', '/api/analytics/overview?days=30', ADMIN);
   const o = r.j, m = o.members;
   check('members: 8 in total (5 pro accounts + 3 customers)', r.s === 200 && m.total === 8 && m.customers === 3);
+  check('confirmed emails counted (1), and how many said yes to news (1)', m.withEmail === 1 && m.newsOptIn === 1);
   check('2 live shops (restricted and waiting ones excluded), 1 verified', m.liveShops === 2 && m.verified === 1);
   check('1 awaiting approval (the apprentice is not counted as a shop)', m.awaitingApproval === 1);
   check('2 restricted accounts (one shop, one customer), 1 active apprentice', m.restricted === 2 && m.apprentices === 1);

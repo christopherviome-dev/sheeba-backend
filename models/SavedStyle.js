@@ -9,7 +9,7 @@ const SavedStyleSchema = new mongoose.Schema({
   customerId: { type: String, required: true },
   name: { type: String, required: true },
   category: { type: String, default: null },
-  photo: { type: String, default: null }, // base64, same pattern as every other photo in Sheeba
+  photo: { type: String, default: null }, // base64, same pattern as every other photo in Mepluge
   notes: { type: String, default: null },
   // Set only when the customer saves a style FROM a real completed request —
   // never implies the reference photo itself is proof of that service.

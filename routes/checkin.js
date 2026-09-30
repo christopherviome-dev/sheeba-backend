@@ -46,13 +46,13 @@ router.post('/self/:code', requireCustomerAuth, async (req, res) => {
   res.json({ ok: true, checkedInAt: appt.checkedInAt });
 });
 
-// A professional scanned (or typed) a customer's Sheeba code.
+// A professional scanned (or typed) a customer's Mepluge code.
 // PRIVACY: the customer's name is only revealed if this professional already
 // has an appointment with them. Otherwise the reply says so and nothing else,
 // so nobody can scan random codes to collect names.
 router.get('/:code', requireAuth, async (req, res) => {
   const code = normalizeCode(req.params.code);
-  if (!code) return res.status(404).json({ error: 'That isn\u2019t a Sheeba code.' });
+  if (!code) return res.status(404).json({ error: 'That isn\u2019t a Mepluge code.' });
   const customer = await Customer.findOne(codeQuery(code));
   if (!customer) return res.status(404).json({ error: 'That code doesn\u2019t belong to a customer.' });
   const shopIds = [String(req.stylistId)];

@@ -21,7 +21,7 @@ app.use('/api/auth', R('routes/auth')); app.use('/api/customers', R('routes/cust
 let pass = 0, fail = 0; const check = (l, c, x = '') => { c ? pass++ : fail++; console.log((c ? 'PASS' : 'FAIL') + ' | ' + l + (c ? '' : '  ' + x)); };
 const server = app.listen(8223, async () => {
   const post = async (u, body, ip = '1.1.1.1') => { const r = await fetch('http://localhost:8223' + u, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify(body) }); return { s: r.status, j: await r.json() }; };
-  console.log('--- NOBODY CAN CHECK WHO USES SHEEBA ---');
+  console.log('--- NOBODY CAN CHECK WHO USES MEPLUGE ---');
   const a = await post('/api/auth/login', { phone: '0200000000', password: 'x' });
   const b = await post('/api/auth/login', { phone: '0544377501', password: 'wrong' });
   check('unknown number and wrong password get the SAME answer', a.s === 401 && b.s === 401 && a.j.error === b.j.error, a.j.error + ' | ' + b.j.error);

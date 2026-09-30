@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 // Must be required right after express and before any routes: makes Express 4
 // pass errors thrown inside async routes to the error handler below, instead
-// of crashing the whole server (one bad request used to take Sheeba offline).
+// of crashing the whole server (one bad request used to take Mepluge offline).
 require('express-async-errors');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -24,14 +24,15 @@ const app = express();
 // Render sits in front of the server: trust its proxy so each visitor's real
 // address is known (needed to limit password guessing per address, not per proxy).
 app.set('trust proxy', 1);
-app.use(cors());
+app.use(cors(require('./lib/http').corsOptions)); // browsers remember permission for 2 hours (fewer round trips)
+app.use('/api/health', require('./routes/health')); // Render health check: OK only with the database connected
 // The `verify` callback captures the raw, unparsed body onto req.rawBody —
 // needed because Paystack's webhook signature is computed over the exact
 // raw bytes sent, and re-serializing the parsed JSON would not reliably
 // reproduce byte-for-byte the same string (key order, whitespace).
 app.use(express.json({ limit: '10mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
-app.get('/', (req, res) => res.json({ status: 'Sheeba API is running' }));
+app.get('/', (req, res) => res.json({ status: 'Mepluge API is running' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/stylists', stylistRoutes);
@@ -48,6 +49,7 @@ app.use('/api/prices', require('./routes/prices'));
 app.use('/api/training', require('./routes/training'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/assist', require('./routes/assist'));
+app.use('/api/push', require('./routes/push'));
 app.use('/api/team', require('./routes/team'));
 app.use('/api/reels', require('./routes/reels'));
 app.use('/api/field', require('./routes/field'));
@@ -85,7 +87,7 @@ mongoose.connect(process.env.MONGODB_URI)
       .then((did) => { if (did) console.log('Member numbers assigned to existing accounts.'); })
       .catch((e) => console.error('Member numbering failed:', e.message));
     console.log('Connected to MongoDB');
-    app.listen(PORT, () => console.log(`Sheeba API listening on port ${PORT}`));
+    app.listen(PORT, () => console.log(`Mepluge API listening on port ${PORT}`));
   })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message);

@@ -100,6 +100,6 @@ const server = app.listen(0, async () => {
   console.log('--- FOUNDING MEMBERS ---');
   check('founding member #3 → gold ring flag (a yes/no, never the number)', discoverCard({ _id: 'x', name: 'A', memberNumber: 3, styles: [] }).card.founding === true && !('memberNumber' in discoverCard({ _id: 'x', name: 'A', memberNumber: 3, styles: [] }).card));
   check('member #1500 → no ring', discoverCard({ _id: 'y', name: 'B', memberNumber: 1500, styles: [] }).card.founding === false);
-  check('the feed knows when a professional joined (for "New on Sheeba")', discoverCard({ _id: 'z', name: 'C', createdAt: '2026-09-28T10:00:00Z', styles: [] }).card.joinedAt === Date.parse('2026-09-28T10:00:00Z'));
+  check('the feed knows when a professional joined (for "New on Mepluge")', discoverCard({ _id: 'z', name: 'C', createdAt: '2026-09-28T10:00:00Z', styles: [] }).card.joinedAt === Date.parse('2026-09-28T10:00:00Z'));
   console.log('\n' + pass + ' passed, ' + fail + ' failed'); server.close(); process.exit(fail ? 1 : 0);
 });

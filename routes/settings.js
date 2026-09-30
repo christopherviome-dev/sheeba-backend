@@ -8,6 +8,7 @@ router.get('/', async (req, res) => {
     ageCheck: await on('ageCheck'), pauseSignups: await on('pauseSignups'), pauseBookings: await on('pauseBookings'),
     messages: await on('messages'), inviteRewards: await on('inviteRewards'),
     announcement: String((await getSetting('announcement')) || ''),
+    googleClientId: process.env.GOOGLE_CLIENT_ID || null, // public by design; the button shows only when set
   });
 });
 module.exports = router;

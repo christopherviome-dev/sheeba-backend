@@ -71,7 +71,7 @@ router.get('/conversations/customer', requireCustomerAuth, async (req, res) => {
   const ids = [...new Set(list.map((c) => c.stylistId).filter(Boolean))];
   const shops = ids.length ? await Stylist.find({ _id: { $in: ids } }, 'name salonName') : [];
   const byId = Object.fromEntries(shops.map((s) => [s._id.toString(), s.salonName || s.name]));
-  res.json(list.map((c) => ({ ...(c.toObject ? c.toObject() : c), stylistName: byId[String(c.stylistId)] || 'A Sheeba shop' })));
+  res.json(list.map((c) => ({ ...(c.toObject ? c.toObject() : c), stylistName: byId[String(c.stylistId)] || 'A Mepluge shop' })));
 });
 
 router.get('/conversations/stylist', requireAuth, async (req, res) => {

@@ -9,7 +9,7 @@ const CustomerSchema = new mongoose.Schema({
   name: { type: String, required: true },
   // Which country this account is in (lib/countries.js). Older accounts: Ghana.
   country: { type: String, default: 'GH' }, // ISO code, checked against lib/worldCountries.js
-  // Sheeba code (lib/codes.js) and who invited this account, if anyone.
+  // Mepluge code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
   // Join order; #1-1,000 are founding members (lib/members.js). No default on
   // purpose: the unique index must never see two empty values.
@@ -23,6 +23,11 @@ const CustomerSchema = new mongoose.Schema({
   // Optional feed preferences from onboarding (never shown to professionals):
   // whose styles to show first, and up to 3 favourite styles (lib/catalog.js keys).
   profilePhoto: { type: String, default: null },
+  // Continue with Google: the Google account id and its confirmed email (never public).
+  googleSub: { type: String, default: null, index: true },
+  email: { type: String, default: null },
+  emailVerified: { type: Boolean, default: false },
+  marketingOptIn: { type: Boolean, default: false }, // said yes to Mepluge news by email
   signupSource: { type: mongoose.Schema.Types.Mixed, default: null }, // where they came from (lib/source.js) // their own picture (checked upload)
   feedFor: { type: String, enum: ['MEN', 'WOMEN', 'BOTH', null], default: null },
   favourites: { type: [String], default: [] },

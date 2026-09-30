@@ -16,6 +16,7 @@ const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/membe
 const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
 const { resolveSource } = require('../lib/source');
+const { verifyGoogleIdToken } = require('../lib/google');
 // Compared against when no account matches, so a wrong number takes as long
 // as a wrong password: a genuine hash of random text, made fresh at startup.
 const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
@@ -31,6 +32,7 @@ function makeToken(stylist) {
 
 function publicStylist(s) {
   const obj = s.toObject ? s.toObject() : { ...s }; // always a copy: never alter the stored record
+  obj.googleConnected = !!obj.googleSub; delete obj.googleSub; delete obj.signupSource;
   delete obj.passwordHash;
   // Not needed by the app after login/signup, so never sent (data minimisation).
   delete obj.guardianName;
@@ -40,20 +42,65 @@ function publicStylist(s) {
 }
 
 // Register a new stylist account (creates a bare account — they fill in salon details after)
+// ---- Continue with Google (see lib/google.js) ----
+// Sign-up with Google: the SAME sign-up as everyone (member number, code,
+// invites, review for new shops), with a confirmed email and no password to
+// forget (a random one nobody knows is stored instead).
+async function googleSignup(req, res) {
+  if (!req.body || !req.body.googleCredential) return true;
+  try {
+    const g = await verifyGoogleIdToken(req.body.googleCredential);
+    if (await Stylist.exists({ googleSub: g.sub })) { res.status(400).json({ error: 'This Google account already has a Mepluge account. Continue with Google to log in.' }); return false; }
+    req.body.password = require('crypto').randomBytes(24).toString('hex');
+    if (!req.body.name && g.name) req.body.name = g.name;
+    req.googleIdentity = { googleSub: g.sub, email: g.email, emailVerified: true, marketingOptIn: req.body.marketingOptIn === true };
+    return true;
+  } catch (e) { res.status(401).json({ error: e.message }); return false; }
+}
+
+// Log in with Google: an existing account logs in exactly like a phone login;
+// a new person is asked for their phone number to finish (needsSignup).
+router.post('/google', async (req, res) => {
+  const k = `google:${req.ip || 'x'}`;
+  if (attempts.status([k]).blocked) return res.status(429).json({ error: 'Too many tries. Wait a few minutes and try again.' });
+  attempts.fail([[k, 30]]);
+  let g;
+  try { g = await verifyGoogleIdToken(req.body.credential); } catch (e) { return res.status(401).json({ error: e.message }); }
+  const acct = await Stylist.findOne({ googleSub: g.sub });
+  if (!acct) return res.json({ needsSignup: true, name: g.name, email: g.email });
+  if (acct.accountStatus === 'SUSPENDED') return res.status(403).json({ error: `This account is suspended${acct.restrictionReason ? ': ' + acct.restrictionReason : '.'}` });
+  res.json({ token: makeToken(acct), stylist: publicStylist(acct) });
+});
+
+// Connect Google to an account that already exists (log in with Google from then on).
+router.post('/google-connect', requireAuth, async (req, res) => {
+  let g;
+  try { g = await verifyGoogleIdToken(req.body.credential); } catch (e) { return res.status(401).json({ error: e.message }); }
+  const me = await Stylist.findById(req.stylistId);
+  if (!me) return res.status(404).json({ error: 'Account not found.' });
+  const other = await Stylist.findOne({ googleSub: g.sub });
+  if (other && other._id.toString() !== me._id.toString()) return res.status(409).json({ error: 'This Google account is already connected to another Mepluge account.' });
+  me.googleSub = g.sub; me.email = g.email; me.emailVerified = true;
+  if (req.body.marketingOptIn === true) me.marketingOptIn = true;
+  await me.save();
+  res.json({ ok: true, email: g.email });
+});
+
 router.post('/register', async (req, res) => {
+  if (!(await googleSignup(req, res))) return;
   if (await getSetting('pauseSignups')) return res.status(503).json({ error: 'New sign-ups are paused for a short while. Please try again later.' });
   const countryCheck = checkCountry(req.body.country);
   if (!countryCheck.ok) return res.status(400).json({ error: countryCheck.error });
   const country = countryCheck.value;
   const phoneCheck = toE164(req.body.phone, country);
   if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
-  // An apprentice names their supervisor by the supervisor's Sheeba code.
+  // An apprentice names their supervisor by the supervisor's code.
   let supervisor = null;
   const isApprentice = req.body.role === 'APPRENTICE';
   if (isApprentice) {
     const sc = normalizeCode(req.body.supervisorCode);
     supervisor = sc ? await Stylist.findOne(codeQuery(sc)) : null;
-    if (!supervisor || supervisor.role === 'APPRENTICE') return res.status(400).json({ error: 'Enter your supervisor\u2019s Sheeba code (they can find it under My Shop, Share & earn).' });
+    if (!supervisor || supervisor.role === 'APPRENTICE') return res.status(400).json({ error: 'Enter your supervisor\u2019s Mepluge code (they can find it under My Shop, Share & earn).' });
   }
   let ageFields = {};
   if (await getSetting('ageCheck')) {
@@ -70,7 +117,7 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const signupSource = await resolveSource(req.body.source); // where they came from (lib/source.js)
     const stylist = await Stylist.create({
-      signupSource,
+      signupSource, ...(req.googleIdentity || {}),
       phone: phoneCheck.value, passwordHash, name,
       memberNumber, code: friendlyCode(name, memberNumber),
       country, currency: getCountry(country).currency, // a shop prices in its own country's currency
@@ -81,7 +128,7 @@ router.post('/register', async (req, res) => {
     });
     try { await Activity.create({ stylistId: stylist._id.toString(), type: 'ACCOUNT_CREATED' }); } catch (e) { /* non-fatal */ }
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'stylist', newDoc: stylist, Stylist, Customer, notify });
-    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${stylist.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: stylist._id.toString(), priority: 'important' });
+    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Mepluge's ${FOUNDING_LIMIT}th member just joined: ${stylist.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: stylist._id.toString(), priority: 'important' });
     if (isApprentice) await notify({ recipientId: supervisor._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_REQUEST', title: `${stylist.name} wants to join your shop as a professional in training`, message: 'Confirm or decline in My Shop \u2192 Account.', entityType: 'shop', entityId: supervisor._id.toString(), priority: 'action_required' });
     await notifyAllAdmins({ type: 'SHOP_UNDER_REVIEW', title: `New shop awaiting review: ${name}`, entityType: 'admin', entityId: stylist._id.toString(), priority: 'action_required' });
     res.json({ token: makeToken(stylist), stylist: publicStylist(stylist) });
@@ -100,7 +147,7 @@ router.post('/login', async (req, res) => {
     if (blocked.blocked) return res.status(429).json({ error: attempts.LOCKED_MESSAGE(blocked.retryMinutes) });
     const stylist = await Stylist.findOne({ phone: { $in: phoneCandidates(phone) } });
     // The SAME answer, and the same amount of work, whether or not the number
-    // has an account: otherwise anyone could check who uses Sheeba.
+    // has an account: otherwise anyone could check who uses Mepluge.
     const ok = await bcrypt.compare(String(password || ''), stylist ? stylist.passwordHash : DUMMY_HASH);
     if (!stylist || !ok) {
       attempts.loginFailed(keys);
@@ -118,9 +165,9 @@ router.post('/login', async (req, res) => {
 
 // "Forgot password?" for both account types. Always gives the same answer,
 // whether or not the number is registered, so it can't be used to check
-// who uses Sheeba. A real account gets at most one open request at a time.
+// who uses Mepluge. A real account gets at most one open request at a time.
 router.post('/forgot-password', async (req, res) => {
-  const reply = { ok: true, message: 'If an account uses this number, Sheeba will call that number to confirm it\'s you, then give you a temporary password.' };
+  const reply = { ok: true, message: 'If an account uses this number, Mepluge will call that number to confirm it\'s you, then give you a temporary password.' };
   // Someone submitting many numbers to flood the admin's queue: paused per address.
   const ipKey = `reset-ip:${req.ip || 'unknown'}`;
   const blocked = attempts.status([ipKey]);

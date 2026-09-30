@@ -18,6 +18,7 @@ const { nextMemberNumber, friendlyCode, FOUNDING_LIMIT } = require('../lib/membe
 const { getSetting } = require('../lib/settings');
 const attempts = require('../lib/attempts');
 const { resolveSource } = require('../lib/source');
+const { verifyGoogleIdToken } = require('../lib/google');
 // Compared against when no account matches, so a wrong number takes as long
 // as a wrong password: a genuine hash of random text, made fresh at startup.
 const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
@@ -39,11 +40,57 @@ function makeToken(customer) {
 }
 function publicCustomer(c) {
   const obj = c.toObject ? c.toObject() : { ...c }; // always a copy: never alter the stored record
+  obj.googleConnected = !!obj.googleSub; delete obj.googleSub; delete obj.signupSource;
   delete obj.passwordHash;
   return obj;
 }
 
+// ---- Continue with Google (see lib/google.js) ----
+// Sign-up with Google: the SAME sign-up as everyone (member number, code,
+// invites, review for new shops), with a confirmed email and no password to
+// forget (a random one nobody knows is stored instead).
+async function googleSignup(req, res) {
+  if (!req.body || !req.body.googleCredential) return true;
+  try {
+    const g = await verifyGoogleIdToken(req.body.googleCredential);
+    if (await Customer.exists({ googleSub: g.sub })) { res.status(400).json({ error: 'This Google account already has a Mepluge account. Continue with Google to log in.' }); return false; }
+    req.body.password = require('crypto').randomBytes(24).toString('hex');
+    if (!req.body.name && g.name) req.body.name = g.name;
+    req.googleIdentity = { googleSub: g.sub, email: g.email, emailVerified: true, marketingOptIn: req.body.marketingOptIn === true };
+    return true;
+  } catch (e) { res.status(401).json({ error: e.message }); return false; }
+}
+
+// Log in with Google: an existing account logs in exactly like a phone login;
+// a new person is asked for their phone number to finish (needsSignup).
+router.post('/google', async (req, res) => {
+  const k = `google:${req.ip || 'x'}`;
+  if (attempts.status([k]).blocked) return res.status(429).json({ error: 'Too many tries. Wait a few minutes and try again.' });
+  attempts.fail([[k, 30]]);
+  let g;
+  try { g = await verifyGoogleIdToken(req.body.credential); } catch (e) { return res.status(401).json({ error: e.message }); }
+  const acct = await Customer.findOne({ googleSub: g.sub });
+  if (!acct) return res.json({ needsSignup: true, name: g.name, email: g.email });
+  if (acct.accountStatus === 'SUSPENDED') return res.status(403).json({ error: `This account is suspended${acct.restrictionReason ? ': ' + acct.restrictionReason : '.'}` });
+  res.json({ token: makeToken(acct), customer: publicCustomer(acct) });
+});
+
+// Connect Google to an account that already exists (log in with Google from then on).
+router.post('/me/google-connect', requireCustomerAuth, async (req, res) => {
+  let g;
+  try { g = await verifyGoogleIdToken(req.body.credential); } catch (e) { return res.status(401).json({ error: e.message }); }
+  const me = await Customer.findById(req.customerId);
+  if (!me) return res.status(404).json({ error: 'Account not found.' });
+  const other = await Customer.findOne({ googleSub: g.sub });
+  if (other && other._id.toString() !== me._id.toString()) return res.status(409).json({ error: 'This Google account is already connected to another Mepluge account.' });
+  me.googleSub = g.sub; me.email = g.email; me.emailVerified = true;
+  if (req.body.marketingOptIn === true) me.marketingOptIn = true;
+  await me.save();
+  res.json({ ok: true, email: g.email });
+});
+
 router.post('/register', async (req, res) => {
+  if (!(await googleSignup(req, res))) return;
   if (await getSetting('pauseSignups')) return res.status(503).json({ error: 'New sign-ups are paused for a short while. Please try again later.' });
   try {
     const { phone, password, name } = req.body;
@@ -63,9 +110,9 @@ router.post('/register', async (req, res) => {
     }
     const memberNumber = await nextMemberNumber({ Stylist, Customer });
     const signupSource = await resolveSource(req.body.source); // where they came from (lib/source.js)
-    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields, signupSource });
+    const customer = await Customer.create({ phone: phoneCheck.value, passwordHash, name, memberNumber, code: friendlyCode(name, memberNumber), country: countryCheck.value, ...ageFields, signupSource, ...(req.googleIdentity || {}) });
     await recordInvite({ inviteCode: req.body.inviteCode, newType: 'customer', newDoc: customer, Stylist, Customer, notify });
-    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Sheeba's ${FOUNDING_LIMIT}th member just joined: ${customer.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: customer._id.toString(), priority: 'important' });
+    if (memberNumber === FOUNDING_LIMIT) await notifyAllAdmins({ type: 'MEMBER_MILESTONE', title: `\u{1F389} Mepluge's ${FOUNDING_LIMIT}th member just joined: ${customer.name}`, message: 'The founding members are complete.', entityType: 'admin', entityId: customer._id.toString(), priority: 'important' });
     try { await Activity.create({ clientId: customer._id.toString(), type: 'ACCOUNT_CREATED', meta: { role: 'customer' } }); } catch (e) { /* non-fatal */ }
     res.json({ token: makeToken(customer), customer: publicCustomer(customer) });
   } catch (e) {
@@ -82,7 +129,7 @@ router.post('/login', async (req, res) => {
     if (blocked.blocked) return res.status(429).json({ error: attempts.LOCKED_MESSAGE(blocked.retryMinutes) });
     const customer = await Customer.findOne({ phone: { $in: phoneCandidates(phone) } });
     // The SAME answer, and the same amount of work, whether or not the number
-    // has an account: otherwise anyone could check who uses Sheeba.
+    // has an account: otherwise anyone could check who uses Mepluge.
     const ok = await bcrypt.compare(String(password || ''), customer ? customer.passwordHash : DUMMY_HASH);
     if (!customer || !ok) {
       attempts.loginFailed(keys);
@@ -246,7 +293,7 @@ router.get('/me/history', requireCustomerAuth, async (req, res) => {
 router.post('/me/book-again/:requestId', requireCustomerAuth, async (req, res) => {
   if (await getSetting('pauseBookings')) return res.status(503).json({ error: 'New bookings are paused for a short while. Please try again later.' });
   const c = await Customer.findById(req.customerId, 'accountStatus restrictionReason');
-  if (c && c.accountStatus && c.accountStatus !== 'ACTIVE') return res.status(403).json({ error: `Your account is restricted${c.restrictionReason ? ': ' + c.restrictionReason : '.'} If you think this is a mistake, contact Sheeba.` });
+  if (c && c.accountStatus && c.accountStatus !== 'ACTIVE') return res.status(403).json({ error: `Your account is restricted${c.restrictionReason ? ': ' + c.restrictionReason : '.'} If you think this is a mistake, contact Mepluge.` });
   const old = await Request.findById(req.params.requestId);
   if (!old || old.clientId !== req.customerId) return res.status(403).json({ error: 'Not your service record.' });
   if (!old.stylistId) return res.status(400).json({ error: 'That was an open request with no specific shop.' });

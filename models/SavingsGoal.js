@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 // IMPORTANT, STATED PLAINLY: this is a personal planning record, not a
-// wallet. No money is transferred, held, or managed by Sheeba because of
+// wallet. No money is transferred, held, or managed by Mepluge because of
 // this document existing — it exists purely so a customer can track their
 // own intention to save toward a future service, and so a future
 // repeat-service reminder has something real to attach a suggestion to.

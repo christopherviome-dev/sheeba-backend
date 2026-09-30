@@ -217,7 +217,7 @@ router.get('/me/service-value', requireAuth, async (req, res) => {
     // Real per-currency totals — this is "Recorded Service Value," never
     // labeled as revenue or payment received (that's the separate, real
     // Payment model below). This IS the reconciliation statement: cash the
-    // professional received directly, tallied by Sheeba, never held by it.
+    // professional received directly, tallied by Mepluge, never held by it.
     recordedServiceValueByCurrency: byCurrency,
     byService: Object.entries(byService).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.total - a.total),
     repeatCustomers: repeatInWindow,

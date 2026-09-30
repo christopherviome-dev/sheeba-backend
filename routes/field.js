@@ -92,7 +92,7 @@ router.post('/trips/:id/visits', async (req, res) => {
   res.json({ visit });
 });
 
-// Update a stop later: a new outcome, a note, or link the shop's Sheeba account (by phone) once they sign up.
+// Update a stop later: a new outcome, a note, or link the shop's Mepluge account (by phone) once they sign up.
 router.put('/visits/:id', async (req, res) => {
   const v = await find(FieldVisit, req.params.id);
   if (!v) return res.status(404).json({ error: 'Stop not found.' });
@@ -100,7 +100,7 @@ router.put('/visits/:id', async (req, res) => {
   if (req.body.note !== undefined) v.note = text(req.body.note, 1000);
   if (req.body.linkPhone) {
     const shop = await Stylist.findOne({ phone: { $in: phoneCandidates(req.body.linkPhone) } }, '_id name salonName');
-    if (!shop) return res.status(404).json({ error: 'No Sheeba professional account uses that number yet.' });
+    if (!shop) return res.status(404).json({ error: 'No Mepluge professional account uses that number yet.' });
     v.signedUpStylistId = shop._id.toString(); v.outcome = 'SIGNED_UP';
   }
   await v.save();

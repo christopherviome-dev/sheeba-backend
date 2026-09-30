@@ -55,7 +55,7 @@ const server = app.listen(0, async () => {
   CommunityFeedback.findById = async (id) => { if (String(id).includes('!')) throw new Error('Cast'); return id === 'f2' ? F2 : null; };
   S.mo.name = 'Mo';
   check('an empty answer is refused', (await call2('POST', '/api/telegram/feedback/f2/reply', 'mo', { text: ' ' })).s === 400);
-  r = await call2('POST', '/api/telegram/feedback/f2/reply', 'mo', { text: 'Yes! Search "barber in Ho" on Sheeba.' });
+  r = await call2('POST', '/api/telegram/feedback/f2/reply', 'mo', { text: 'Yes! Search "barber in Ho" on Mepluge.' });
   const msg = sent.filter((x) => x.method === 'sendMessage').pop();
   check("the answer is posted in the group as a reply to Kojo's message", r.s === 200 && msg.body.chat_id === -100123 && msg.body.reply_parameters.message_id === 77 && /barber in Ho/.test(msg.body.text));
   check('the answer is saved with who answered, and the question is marked handled', F2.replies.length === 1 && F2.replies[0].byName === 'Mo' && F2.handled === true);

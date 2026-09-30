@@ -6,7 +6,7 @@ const MessageSchema = new mongoose.Schema({
   senderId: { type: String, default: null }, // null for senderType 'system'
   messageType: { type: String, enum: ['text', 'photo', 'structured'], required: true },
   text: { type: String, default: null },
-  photo: { type: String, default: null }, // base64 data URL, same pattern as everywhere else in Sheeba
+  photo: { type: String, default: null }, // base64 data URL, same pattern as everywhere else in Mepluge
   // Structured actions are DISPLAY records of real events that happened
   // through the real, existing endpoints (request accept/decline/complete) —
   // never a second path that can itself change a business record. See

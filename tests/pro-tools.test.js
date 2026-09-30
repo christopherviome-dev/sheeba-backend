@@ -16,7 +16,7 @@ for (let i = 0; i < 12; i++) S['s' + i] = doc({ id: 's' + i, name: 'Shop ' + i, 
 const C = { ama: doc({ id: 'ama', name: 'Ama', accountStatus: 'ACTIVE' }), bad: doc({ id: 'bad', name: 'Bad', accountStatus: 'RESTRICTED' }), yaw: doc({ id: 'yaw', name: 'Yaw', accountStatus: 'ACTIVE' }) };
 const RQ = {
   old: doc({ id: 'old', stylistId: 'pro', clientId: 'ama', status: 'completed', priceSnapshot: 300, currencySnapshot: 'GHS', serviceNameSnapshot: 'Knotless', completedAt: now - 40 * DAY, updatedAt: now }),
-  leg: doc({ id: 'leg', stylistId: 'pro', clientId: 'yaw', status: 'completed', priceSnapshot: 100, currencySnapshot: 'GHS', serviceNameSnapshot: 'Cornrows', updatedAt: now - 3600 * 1000 }),
+  leg: doc({ id: 'leg', stylistId: 'pro', clientId: 'yaw', status: 'completed', priceSnapshot: 100, currencySnapshot: 'GHS', serviceNameSnapshot: 'Cornrows', updatedAt: Math.max(now - 3600 * 1000, new Date(new Date(now).setHours(0, 0, 0, 0)).getTime() + 1000) }), // always "today", even just after midnight
 };
 const NOTES = {}, CONV = {}, MSG = [];
 const get = (T) => async (id) => { if (String(id).includes('!')) throw new Error('Cast'); return T[String(id)] || null; };

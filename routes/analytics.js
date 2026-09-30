@@ -117,6 +117,8 @@ router.get('/overview', requireAuth, requirePermission('analytics'), async (req,
     days,
     members: {
       total: everyone.length, professionals: shops.filter((s) => s.role !== 'APPRENTICE').length, customers: customers.length,
+      withEmail: [...shops, ...customers].filter((x) => x.emailVerified && x.email).length, // confirmed emails (Continue with Google)
+      newsOptIn: [...shops, ...customers].filter((x) => x.marketingOptIn && x.email).length, // said yes to news by email
       liveShops: live.length, awaitingApproval: shops.filter((s) => s.status === 'UNDER_REVIEW' && s.role !== 'APPRENTICE').length,
       verified: live.filter((s) => s.verified).length,
       restricted: shops.filter((s) => (s.accountStatus || 'ACTIVE') !== 'ACTIVE').length + customers.filter((c) => (c.accountStatus || 'ACTIVE') !== 'ACTIVE').length,

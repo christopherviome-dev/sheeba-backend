@@ -50,18 +50,18 @@ router.get('/team', requireAuth, requirePermission('team'), async (req, res) => 
   });
 });
 
-// Give someone a role (they need their own Sheeba professional account).
+// Give someone a role (they need their own Mepluge professional account).
 router.post('/team', requireAuth, requirePermission('team'), async (req, res) => {
   const role = req.body.role;
   if (!ROLES[role]) return res.status(400).json({ error: 'Choose a role.' });
-  if (!req.body.phone) return res.status(400).json({ error: 'Enter the phone number of their Sheeba account.' });
+  if (!req.body.phone) return res.status(400).json({ error: 'Enter the phone number of their account on Mepluge.' });
   const person = await Stylist.findOne({ phone: { $in: phoneCandidates(req.body.phone) } });
-  if (!person) return res.status(404).json({ error: 'No Sheeba professional account uses that number. They need to create one first.' });
+  if (!person) return res.status(404).json({ error: 'No Mepluge professional account uses that number. They need to create one first.' });
   if ((person.accountStatus || 'ACTIVE') !== 'ACTIVE') return res.status(400).json({ error: 'That account is restricted.' });
   if (roleOf(person)) return res.status(400).json({ error: `${person.name} is already on the admin team. Change their role instead.` });
   person.adminRole = role;
   await person.save();
-  await notify({ recipientId: person._id.toString(), recipientType: 'stylist', type: 'ADMIN_ROLE', title: `You've joined the Sheeba admin team as ${ROLES[role].label}`, message: 'Open Admin from the menu to get started.', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
+  await notify({ recipientId: person._id.toString(), recipientType: 'stylist', type: 'ADMIN_ROLE', title: `You've joined the Mepluge admin team as ${ROLES[role].label}`, message: 'Open Admin from the menu to get started.', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
   try { await AdminAction.create({ adminId: req.stylistId, action: 'ADMIN_ROLE_GIVEN', targetType: 'stylist', targetId: person._id.toString(), meta: { role } }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true, name: person.name, role });
 });
@@ -82,7 +82,7 @@ router.put('/team/:id', requireAuth, requirePermission('team'), async (req, res)
   if (role !== 'SUPER_ADMIN') person.isAdmin = false; // the older admin flag must not keep full access
   await person.save();
   await notify({ recipientId: person._id.toString(), recipientType: 'stylist', type: 'ADMIN_ROLE',
-    title: role ? `Your admin role is now ${ROLES[role].label}` : 'You are no longer on the Sheeba admin team', message: '', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
+    title: role ? `Your admin role is now ${ROLES[role].label}` : 'You are no longer on the Mepluge admin team', message: '', entityType: 'admin', entityId: person._id.toString(), priority: 'important' });
   try { await AdminAction.create({ adminId: req.stylistId, action: role ? 'ADMIN_ROLE_CHANGED' : 'ADMIN_ROLE_REMOVED', targetType: 'stylist', targetId: person._id.toString(), meta: { from: current, to: role } }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true, role });
 });
@@ -265,7 +265,7 @@ router.post('/customers/:id/restrict', requireAuth, requirePermission('restrict'
   let c = null;
   try { c = await Customer.findByIdAndUpdate(req.params.id, { accountStatus, restrictionReason: why, restrictedAt: Date.now(), restrictedBy: req.stylistId, restoredAt: null }, { new: true }); } catch (e) { /* bad id */ }
   if (!c) return res.status(404).json({ error: 'Not found.' });
-  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTRICTED', title: `Your Sheeba account has been ${accountStatus.toLowerCase()}`, message: why, entityType: null, entityId: null, priority: 'important' });
+  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTRICTED', title: `Your account has been ${accountStatus.toLowerCase()}`, message: why, entityType: null, entityId: null, priority: 'important' });
   try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTRICTED', targetType: 'customer', targetId: c._id.toString(), reason: why, meta: { accountStatus } }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true, accountStatus: c.accountStatus });
 });
@@ -274,7 +274,7 @@ router.post('/customers/:id/restore', requireAuth, requirePermission('restrict')
   let c = null;
   try { c = await Customer.findByIdAndUpdate(req.params.id, { accountStatus: 'ACTIVE', restoredAt: Date.now(), restrictionReason: null }, { new: true }); } catch (e) { /* bad id */ }
   if (!c) return res.status(404).json({ error: 'Not found.' });
-  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTORED', title: 'Your Sheeba account is active again', message: '', entityType: null, entityId: null, priority: 'important' });
+  await notify({ recipientId: c._id.toString(), recipientType: 'customer', type: 'ACCOUNT_RESTORED', title: 'Your account is active again', message: '', entityType: null, entityId: null, priority: 'important' });
   try { await AdminAction.create({ adminId: req.stylistId, action: 'ACCOUNT_RESTORED', targetType: 'customer', targetId: c._id.toString() }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true, accountStatus: 'ACTIVE' });
 });
@@ -309,7 +309,7 @@ router.post('/service-proposals/:id/:decision', requireAuth, requirePermission('
     if (decision === 'approve') st.services = [...new Set([...servicesOf(st), p.key])];
     await st.save();
     await notify({ recipientId: st._id.toString(), recipientType: 'stylist', type: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED',
-      title: decision === 'approve' ? `"${p.name}" is now a Sheeba service` : `"${p.name}" wasn't added as a service`, message: decision === 'approve' ? 'Customers can now find you for it.' : reason, entityType: 'shop', entityId: st._id.toString(), priority: 'normal' });
+      title: decision === 'approve' ? `"${p.name}" is now a Mepluge service` : `"${p.name}" wasn't added as a service`, message: decision === 'approve' ? 'Customers can now find you for it.' : reason, entityType: 'shop', entityId: st._id.toString(), priority: 'normal' });
   }
   try { await AdminAction.create({ adminId: req.stylistId, action: decision === 'approve' ? 'SERVICE_APPROVED' : 'SERVICE_REJECTED', targetType: 'service', targetId: p._id.toString(), reason: decision === 'approve' ? p.name : `${p.name}: ${reason}` }); } catch (e) { /* non-fatal */ }
   res.json({ ok: true, status: p.status });

@@ -237,7 +237,7 @@ router.post('/apprentices/:id/graduate', requireAuth, async (req, res) => {
   plan.graduatedAt = a.graduatedAt;
   await plan.save();
   const sup = await findSafe(req.stylistId);
-  await notify({ recipientId: a._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_GRADUATED', title: '🎓 Congratulations, you\u2019ve graduated!', message: `${sup ? sup.salonName || sup.name : 'Your supervisor'} says you're ready. Set up your shop; Sheeba will review it before it goes public.`, entityType: 'shop', entityId: a._id.toString(), priority: 'important' });
+  await notify({ recipientId: a._id.toString(), recipientType: 'stylist', type: 'APPRENTICE_GRADUATED', title: '🎓 Congratulations, you\u2019ve graduated!', message: `${sup ? sup.salonName || sup.name : 'Your supervisor'} says you're ready. Set up your shop; Mepluge will review it before it goes public.`, entityType: 'shop', entityId: a._id.toString(), priority: 'important' });
   await notifyAllAdmins({ type: 'APPRENTICE_GRADUATED', title: `An apprentice graduated: ${a.name}`, message: 'Their shop will appear for approval once they set it up.', entityType: 'admin', entityId: a._id.toString(), priority: 'normal' });
   res.json({ ok: true });
 });

@@ -50,7 +50,7 @@ const StylistSchema = new mongoose.Schema({
   // How this professional works. Empty = not said yet. No one is forced to
   // have a physical shop: home visits, mobile and appointment-only are equal.
   workModes: { type: [{ type: String, enum: ['SALON', 'HOME', 'MOBILE', 'APPOINTMENT'] }], default: [] },
-  // Sheeba code (lib/codes.js) and who invited this account, if anyone.
+  // Mepluge code (lib/codes.js) and who invited this account, if anyone.
   code: { type: String, unique: true, sparse: true },
   // Join order; #1-1,000 are founding members (lib/members.js). No default on
   // purpose: the unique index must never see two empty values.
@@ -93,13 +93,18 @@ const StylistSchema = new mongoose.Schema({
   restrictedAt: { type: Number, default: null },
   restrictedBy: { type: String, default: null }, // admin's stylistId
   restoredAt: { type: Number, default: null },
-  // Staff/apprentice access: other REAL Sheeba accounts (their own, not a
+  // Staff/apprentice access: other REAL Mepluge accounts (their own, not a
   // fake invite to someone without one) authorized to see and respond to
   // THIS shop's requests on the owner's behalf. Deliberately does not grant
   // access to edit this shop's branding, services, or account settings —
   // scoped narrowly to the operational side, per the actual stated need.
   // Admin team role (see lib/adminRoles.js). null = not an admin. Older admin
   // accounts have isAdmin: true and count as SUPER_ADMIN.
+  // Continue with Google: the Google account id and its confirmed email (never public).
+  googleSub: { type: String, default: null, index: true },
+  email: { type: String, default: null },
+  emailVerified: { type: Boolean, default: false },
+  marketingOptIn: { type: Boolean, default: false }, // said yes to Mepluge news by email
   signupSource: { type: mongoose.Schema.Types.Mixed, default: null }, // where they came from (lib/source.js)
   adminRole: { type: String, enum: ['SUPER_ADMIN', 'VERIFIER', 'MODERATOR', 'SUPPORT', 'ANALYST', 'FIELD_AGENT', null], default: null },
   staffAccess: [{
