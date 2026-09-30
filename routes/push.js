@@ -43,4 +43,30 @@ router.post('/test', async (req, res) => {
   res.json({ sent });
 });
 
+// Which groups ring this person's phone (admin work only for admins).
+const { prefsOf, cleanPrefs } = require('../lib/alertPrefs');
+const { roleById } = require('../lib/adminRoles');
+const AlertPref = require('../models/AlertPref');
+async function groupsFor(actor) {
+  const base = actor.type === 'customer' ? ['bookings', 'messages', 'looks', 'rewards', 'account'] : ['bookings', 'messages', 'looks', 'team', 'rewards', 'account'];
+  if (actor.type !== 'customer') { let role = null; try { role = await roleById(actor.id); } catch (e) { /* none */ } if (role) base.push('admin'); }
+  return base;
+}
+router.get('/prefs', async (req, res) => {
+  const actor = identifyActor(req);
+  if (!actor) return res.status(401).json({ error: 'Log in first.' });
+  const groups = await groupsFor(actor);
+  const saved = await AlertPref.findOne({ ownerType: actor.type, ownerId: actor.id });
+  const all = prefsOf(saved && saved.prefs);
+  res.json({ groups, prefs: Object.fromEntries(groups.map((g) => [g, all[g]])) });
+});
+router.put('/prefs', async (req, res) => {
+  const actor = identifyActor(req);
+  if (!actor) return res.status(401).json({ error: 'Log in first.' });
+  const saved = await AlertPref.findOne({ ownerType: actor.type, ownerId: actor.id });
+  const prefs = { ...prefsOf(saved && saved.prefs), ...cleanPrefs(req.body && req.body.prefs) };
+  await AlertPref.findOneAndUpdate({ ownerType: actor.type, ownerId: actor.id }, { prefs, updatedAt: Date.now() }, { upsert: true });
+  res.json({ ok: true, prefs });
+});
+
 module.exports = router;

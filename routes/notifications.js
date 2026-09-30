@@ -8,7 +8,9 @@ router.get('/notifications', async (req, res) => {
   const actor = identifyActor(req);
   if (!actor) return res.status(401).json({ error: 'Not logged in.' });
   const list = await Notification.find({ recipientId: actor.id, recipientType: actor.type }).sort({ createdAt: -1 }).limit(50);
-  res.json(list);
+  // Alerts saved before the rename still say "Sheeba": show them with the new name.
+  const renamed = (t) => (typeof t === 'string' ? t.replace(/\bSheeba\b/g, 'Mepluge') : t);
+  res.json(list.map((n) => { const o = n.toObject ? n.toObject() : { ...n }; o.title = renamed(o.title); o.message = renamed(o.message); return o; }));
 });
 
 router.get('/notifications/unread-count', async (req, res) => {
